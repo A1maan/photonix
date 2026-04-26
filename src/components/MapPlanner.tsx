@@ -146,7 +146,7 @@ export function MapPlanner({
         })}
       </MapContainer>
 
-      <div className="map-hud pointer-events-none absolute left-4 top-4 px-3 py-2 text-xs text-slate-300">
+      <div className="map-hud pointer-events-none absolute left-16 top-4 px-3 py-2 text-xs text-slate-300">
         Click map to add a {newPointPriority} {newPointCategory} point
       </div>
       <div className="map-hud pointer-events-none absolute bottom-4 left-4 flex flex-wrap gap-2 px-3 py-2 text-xs text-slate-300">

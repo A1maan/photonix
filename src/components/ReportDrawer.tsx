@@ -23,14 +23,14 @@ export function ReportDrawer({
 }: ReportDrawerProps) {
   return (
     <div
-      className={`fixed inset-x-0 bottom-0 z-[1200] border-t border-white/10 bg-[#05090a]/96 p-5 shadow-2xl backdrop-blur transition-transform duration-300 ${
+      className={`report-drawer fixed inset-x-0 bottom-0 z-[1200] p-5 shadow-2xl transition-transform duration-300 ${
         open ? "translate-y-0" : "translate-y-full"
       }`}
     >
       <div className="mx-auto max-w-6xl">
         <div className="mb-4 flex items-center justify-between gap-4">
           <div className="flex items-center gap-3">
-            <span className="grid h-9 w-9 place-items-center rounded-full border border-signal/35 bg-signal/5 text-signal">
+            <span className="report-icon grid h-9 w-9 place-items-center text-signal">
               <FileText size={17} />
             </span>
             <div>

@@ -4,6 +4,7 @@ import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react"
 
 type GlobeSelectorProps = {
   onSelectCountry: (country: string) => void;
+  startOnGlobe?: boolean;
 };
 
 type GeoFeature = {
@@ -90,12 +91,12 @@ function useWindowSize() {
   return size;
 }
 
-export function GlobeSelector({ onSelectCountry }: GlobeSelectorProps) {
+export function GlobeSelector({ onSelectCountry, startOnGlobe = false }: GlobeSelectorProps) {
   const globeRef = useRef<GlobeMethods | undefined>(undefined);
   const splashLogoRef = useRef<HTMLImageElement | null>(null);
   const targetLogoRef = useRef<HTMLImageElement | null>(null);
   const landingMeasureLogoRef = useRef<HTMLImageElement | null>(null);
-  const [showGlobe, setShowGlobe] = useState(false);
+  const [showGlobe, setShowGlobe] = useState(startOnGlobe);
   const [enteringGlobe, setEnteringGlobe] = useState(false);
   const [returningLanding, setReturningLanding] = useState(false);
   const [transitionLogo, setTransitionLogo] = useState<TransitionLogo | null>(null);

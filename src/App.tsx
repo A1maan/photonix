@@ -30,6 +30,7 @@ export function App() {
   const [lastOptimization, setLastOptimization] = useState<OptimizationResult | null>(null);
   const [advisor, setAdvisor] = useState<AdvisorRecommendation | null>(null);
   const [reportOpen, setReportOpen] = useState(false);
+  const [startOnGlobe, setStartOnGlobe] = useState(false);
 
   const strategy = useMemo(() => getFallbackStrategy(constraints), [constraints]);
   const analysis = useMemo(
@@ -43,7 +44,15 @@ export function App() {
   );
 
   if (!country) {
-    return <GlobeSelector onSelectCountry={setCountry} />;
+    return (
+      <GlobeSelector
+        startOnGlobe={startOnGlobe}
+        onSelectCountry={(nextCountry) => {
+          setCountry(nextCountry);
+          setStartOnGlobe(false);
+        }}
+      />
+    );
   }
 
   const addDemandPoint = (lat: number, lng: number) => {
@@ -162,7 +171,10 @@ export function App() {
           onOptimize={optimize}
           onReset={reset}
           onPreset={applyPreset}
-          onBackToGlobe={() => setCountry(null)}
+          onBackToGlobe={() => {
+            setStartOnGlobe(true);
+            setCountry(null);
+          }}
         />
 
         <section className="workspace-panel min-w-0 px-5 py-5">
