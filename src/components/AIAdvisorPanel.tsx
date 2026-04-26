@@ -8,7 +8,7 @@ type AIAdvisorPanelProps = {
 
 export function AIAdvisorPanel({ strategy, recommendation }: AIAdvisorPanelProps) {
   return (
-    <section className="border border-signal/20 bg-[linear-gradient(180deg,rgba(54,242,192,0.08),rgba(7,13,15,0.95))] p-4 shadow-glow [border-radius:6px]">
+    <section className="panel-section ai-panel p-4">
       <div className="section-title mb-3">
         <BrainCircuit size={17} className="text-signal" />
         AI Mission Planner
@@ -28,7 +28,7 @@ export function AIAdvisorPanel({ strategy, recommendation }: AIAdvisorPanelProps
           <dd className="mt-1 text-slate-300">{recommendation.tradeoff}</dd>
         </div>
       </dl>
-      <div className="mt-4 rounded-md border border-white/10 bg-black/40 p-3">
+      <div className="tool-row mt-4 p-3">
         <p className="mb-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
           Strategy weights
         </p>

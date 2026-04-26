@@ -135,7 +135,7 @@ export function App() {
 
   return (
     <main className="app-shell min-h-screen text-white">
-      <div className="grid min-h-screen lg:grid-cols-[332px_minmax(0,1fr)_360px]">
+      <div className="planner-grid grid min-h-screen lg:grid-cols-[360px_minmax(0,1fr)_376px]">
         <PlanningSidebar
           constraints={constraints}
           satelliteTypes={satelliteTypes}
@@ -165,14 +165,14 @@ export function App() {
           onBackToGlobe={() => setCountry(null)}
         />
 
-        <section className="min-w-0 px-5 py-5">
-          <header className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <section className="workspace-panel min-w-0 px-5 py-5">
+          <header className="workspace-header mb-4 flex flex-wrap items-center justify-between gap-3">
             <div>
               <div className="eyebrow flex items-center gap-2">
                 <Globe2 size={14} className="text-signal" />
                 {country}
               </div>
-              <h1 className="mt-1 text-2xl font-semibold text-white">
+              <h1 className="workspace-title mt-1">
                 {labelMission(constraints.missionGoal)} coverage plan
               </h1>
             </div>
@@ -180,7 +180,7 @@ export function App() {
               <button
                 type="button"
                 onClick={() => setReportOpen(true)}
-                className="secondary-command flex items-center gap-2 px-3 py-2 text-sm"
+                className="tool-command flex items-center gap-2 px-3 py-2 text-sm"
               >
                 <FileText size={15} /> Report
               </button>
@@ -200,7 +200,7 @@ export function App() {
           />
         </section>
 
-        <aside className="planner-sidebar flex h-full min-h-0 flex-col gap-4 overflow-y-auto border-l border-white/10 px-4 py-4">
+        <aside className="planner-sidebar inspector-rail flex h-full min-h-0 flex-col gap-4 overflow-y-auto px-5 py-5">
           <CoverageInspector
             analysis={analysis}
             satelliteCount={satellites.filter((satellite) => satellite.enabled).length}
@@ -215,7 +215,7 @@ export function App() {
             </div>
             <div className="space-y-2">
               {analysis.uncoveredPoints.slice(0, 5).map((point) => (
-                <div key={point.id} className="flex items-center justify-between gap-3 rounded-md border border-white/10 bg-black/35 p-3">
+                <div key={point.id} className="tool-row flex items-center justify-between gap-3 p-3">
                   <div>
                     <p className="text-sm text-white">{point.name}</p>
                     <p className="text-xs text-slate-500">

@@ -66,17 +66,22 @@ export function PlanningSidebar({
   const enabledCount = satellites.filter((satellite) => satellite.enabled).length;
 
   return (
-    <aside className="planner-sidebar flex h-full min-h-0 flex-col gap-4 overflow-y-auto border-r border-white/10 px-4 py-4">
-      <div>
+    <aside className="planner-sidebar flex h-full min-h-0 flex-col gap-5 overflow-y-auto px-5 py-5">
+      <div className="planner-brand">
         <button
           type="button"
           onClick={onBackToGlobe}
-          className="secondary-command mb-4 flex w-full items-center justify-center gap-2 px-3 py-3 text-sm font-semibold"
+          className="planner-back-button mb-7 flex items-center gap-2 text-sm"
         >
           <ArrowLeft size={17} /> Back to globe
         </button>
-        <p className="eyebrow text-signal">Photonix</p>
-        <h2 className="mt-2 text-2xl font-semibold text-white">Mission planner</h2>
+        <img
+          src="/assets/photonix-logo-no-bg-trimmed.png"
+          alt="Photonix"
+          className="w-40 object-contain object-left"
+        />
+        <p className="eyebrow mt-5 text-signal">Mission control</p>
+        <h2 className="planner-title mt-2">Saudi network planner</h2>
       </div>
 
       <section className="panel-section p-4">
@@ -160,7 +165,7 @@ export function PlanningSidebar({
           {satellites
             .filter((satellite) => satellite.enabled)
             .map((satellite) => (
-              <div key={satellite.id} className="rounded-md border border-white/10 bg-black/35 p-3">
+              <div key={satellite.id} className="tool-row p-3">
                 <div className="mb-2 flex items-center justify-between gap-3">
                   <span className="text-sm font-medium text-white">{satellite.name}</span>
                   <button
@@ -229,19 +234,19 @@ export function PlanningSidebar({
       <section className="panel-section-plain">
         <p className="mb-3 text-sm font-semibold text-white">Demo presets</p>
         <div className="grid gap-2">
-          <button type="button" onClick={() => onPreset("low_budget")} className="secondary-command px-3 py-2 text-left text-xs">
+          <button type="button" onClick={() => onPreset("low_budget")} className="preset-command px-3 py-2 text-left text-xs">
             Low Budget Rural Broadband
           </button>
-          <button type="button" onClick={() => onPreset("disaster")} className="secondary-command px-3 py-2 text-left text-xs">
+          <button type="button" onClick={() => onPreset("disaster")} className="preset-command px-3 py-2 text-left text-xs">
             Disaster Response
           </button>
-          <button type="button" onClick={() => onPreset("schools")} className="secondary-command px-3 py-2 text-left text-xs">
+          <button type="button" onClick={() => onPreset("schools")} className="preset-command px-3 py-2 text-left text-xs">
             Schools And Clinics Priority
           </button>
         </div>
       </section>
 
-      <div className="sticky bottom-0 mt-auto grid gap-2 bg-[#05090a]/95 pt-2 backdrop-blur">
+      <div className="planner-actions sticky bottom-0 mt-auto grid gap-2 pt-3">
         <button
           type="button"
           onClick={onOptimize}

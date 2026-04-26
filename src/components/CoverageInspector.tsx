@@ -27,9 +27,9 @@ export function CoverageInspector({ analysis, satelliteCount, maxSatellites }: C
           <span>Coverage progress</span>
           <span>{analysis.weightedCoveragePercent}%</span>
         </div>
-        <div className="h-2 overflow-hidden rounded-full bg-black/60">
+        <div className="coverage-track h-2 overflow-hidden bg-black/60">
           <div
-            className="h-full rounded-full bg-signal transition-all"
+            className="h-full bg-signal transition-all"
             style={{ width: `${analysis.weightedCoveragePercent}%` }}
           />
         </div>
@@ -61,7 +61,7 @@ function Kpi({
   danger?: boolean;
 }) {
   return (
-    <div className="rounded-md border border-white/10 bg-black/38 p-3">
+    <div className="kpi-tile p-3">
       <div className="mb-2 flex items-center gap-2 text-xs text-slate-400">
         <span className={danger ? "text-danger" : "text-signal"}>{icon}</span>
         {label}
