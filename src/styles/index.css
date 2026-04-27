@@ -672,6 +672,11 @@ select {
   background: rgba(0, 0, 0, 0.18);
 }
 
+.mission-stage-shade {
+  z-index: 1;
+  background: rgba(2, 6, 11, 0.18);
+}
+
 .mission-panel {
   position: fixed;
   top: 0;
@@ -929,6 +934,37 @@ select {
   color: rgba(226, 240, 255, 0.54);
   font-size: 0.62rem;
   font-weight: 700;
+}
+
+.mission-demo-cta {
+  bottom: 6.85rem;
+  left: 1.25rem;
+  display: inline-flex;
+  min-height: 2.7rem;
+  align-items: center;
+  justify-content: center;
+  gap: 0.55rem;
+  border: 1px solid rgba(52, 211, 153, 0.52);
+  border-radius: 0;
+  background: #34d399;
+  color: #03100d;
+  font-size: 0.76rem;
+  font-weight: 850;
+  letter-spacing: 0.08em;
+  padding: 0 0.95rem;
+  text-transform: uppercase;
+  transition:
+    background-color 150ms ease,
+    transform 150ms ease;
+}
+
+.mission-demo-cta:hover {
+  background: #a7f3d0;
+  transform: translateY(-1px);
+}
+
+.mission-control.is-drawer-open .mission-demo-cta {
+  left: 1.25rem;
 }
 
 .mission-telemetry {
@@ -1271,6 +1307,19 @@ select {
   color: rgba(226, 240, 255, 0.48);
   font-size: 0.57rem;
   font-weight: 760;
+}
+
+.assumption-list {
+  display: grid;
+  gap: 0.48rem;
+}
+
+.assumption-list span {
+  border-left: 2px solid rgba(34, 211, 238, 0.45);
+  color: rgba(226, 240, 255, 0.72);
+  font-size: 0.75rem;
+  line-height: 1.35;
+  padding-left: 0.62rem;
 }
 
 @media (max-width: 1119px) {

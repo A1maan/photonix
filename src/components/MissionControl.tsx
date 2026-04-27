@@ -9,6 +9,7 @@ import {
   RadioTower,
   Satellite,
   Send,
+  Sparkles,
   Sun,
   Waves,
 } from "lucide-react";
@@ -173,8 +174,9 @@ export function MissionControl({ country, logoTransitioning = false, onBackToGlo
     };
   }, []);
 
-  const runPlanner = () => {
-    const trimmedQuestion = question.trim() || DEFAULT_QUESTION;
+  const runPlanner = (overrideQuestion?: string, overrideWorkload?: OrbitalWorkload) => {
+    const activeWorkload = overrideWorkload ?? selectedWorkload;
+    const trimmedQuestion = overrideQuestion?.trim() || question.trim() || DEFAULT_QUESTION;
     if (answerTimerRef.current) {
       window.clearTimeout(answerTimerRef.current);
     }
@@ -191,11 +193,18 @@ export function MissionControl({ country, logoTransitioning = false, onBackToGlo
         ...current,
         {
           role: "planner",
-          text: missionPlannerResponse(selectedWorkload, computeSatellites),
+          text: missionPlannerResponse(activeWorkload, computeSatellites),
         },
       ]);
       setThinking(false);
     }, 850);
+  };
+
+  const runGccLlmScenario = () => {
+    const llmWorkload = orbitalWorkloads.find((workload) => workload.id === "llm") ?? orbitalWorkloads[0];
+    setSelectedWorkloadId("llm");
+    setQuestion(DEFAULT_QUESTION);
+    runPlanner(DEFAULT_QUESTION, llmWorkload);
   };
 
   const pointLabel = (point: object) => {
@@ -206,7 +215,7 @@ export function MissionControl({ country, logoTransitioning = false, onBackToGlo
     if (item.kind === "ground") {
       return `${item.name}<br/>${item.bandwidthGbps?.toFixed(1)} Gbps downlink`;
     }
-    return `${item.name}<br/>Cached Starlink-like TLE track`;
+    return `${item.name}<br/>Cached CelesTrak Starlink TLE track`;
   };
 
   return (
@@ -232,10 +241,6 @@ export function MissionControl({ country, logoTransitioning = false, onBackToGlo
                 alt="Photonix"
                 className="mission-logo"
               />
-              {/* <p className="mission-subhead">Orbital AI data center mission control</p>
-              <div className="mission-region-line">
-                <span>{country} / GCC demand zone</span>
-              </div> */}
             </div>
           </div>
           <div className="mission-clock hidden text-right md:block">
@@ -301,7 +306,15 @@ export function MissionControl({ country, logoTransitioning = false, onBackToGlo
             rendererConfig={{ antialias: true, alpha: true }}
           />
 
-          <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_42%_48%,transparent_0,rgba(2,6,11,0.02)_42%,rgba(2,6,11,0.74)_100%)]" />
+          <div className="mission-stage-shade pointer-events-none absolute inset-0" />
+          <button
+            type="button"
+            className="mission-demo-cta absolute z-20"
+            onClick={runGccLlmScenario}
+          >
+            <Sparkles size={15} />
+            Run GCC LLM scenario
+          </button>
           <div className="mission-telemetry absolute bottom-5 left-5 right-5 z-20 grid gap-3 sm:grid-cols-3">
             <Telemetry icon={<Satellite size={16} />} label="Tracked shell" value={`${cachedStarlinkTles.length} sats`} />
             <Telemetry icon={<RadioTower size={16} />} label="GCC stations" value={`${groundStations.length} sites`} />
@@ -455,6 +468,18 @@ export function MissionControl({ country, logoTransitioning = false, onBackToGlo
               <Timeline city="Riyadh" next="14 min" duration="8 min" active={missionActive} />
               <Timeline city="Dubai" next="18 min" duration="7 min" active={missionActive} />
               <Timeline city="Abu Dhabi" next="21 min" duration="6 min" active={missionActive} />
+            </div>
+          </section>
+
+          <section className="mission-card compact">
+            <div className="mission-card-title">
+              <Sparkles size={17} />
+              Demo Assumptions
+            </div>
+            <div className="assumption-list">
+              <span>Cached CelesTrak Starlink TLE snapshot, 168 satellites</span>
+              <span>Scripted planner response, no live Claude claim</span>
+              <span>Modeled GCC downlink windows for presentation</span>
             </div>
           </section>
         </aside>

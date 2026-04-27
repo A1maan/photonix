@@ -1,46 +1,5 @@
-import type { ComputeSatellite, GroundStation, OrbitalWorkload, TrackedTle } from "../types";
-
-function checksum(line: string) {
-  let sum = 0;
-  for (const char of line.slice(0, 68)) {
-    if (char >= "0" && char <= "9") {
-      sum += Number(char);
-    } else if (char === "-") {
-      sum += 1;
-    }
-  }
-  return String(sum % 10);
-}
-
-function tleLine1(satnum: number) {
-  const id = String(satnum).padStart(5, "0");
-  const body = `1 ${id}U 24001A   26001.00000000  .00001264  00000+0  89214-4 0  999`;
-  return body.slice(0, 68) + checksum(body);
-}
-
-function tleLine2(satnum: number, raanDeg: number, meanAnomalyDeg: number) {
-  const id = String(satnum).padStart(5, "0");
-  const raan = raanDeg.toFixed(4).padStart(8, " ");
-  const meanAnomaly = meanAnomalyDeg.toFixed(4).padStart(8, " ");
-  const rev = String(1200 + (satnum % 700)).padStart(5, "0");
-  const body = `2 ${id}  53.2000 ${raan} 0001500  88.6000 ${meanAnomaly} 15.05560000${rev}`;
-  return body.slice(0, 68) + checksum(body);
-}
-
-export const cachedStarlinkTles: TrackedTle[] = Array.from({ length: 168 }, (_, index) => {
-  const satnum = 70001 + index;
-  const orbitalPlane = index % 24;
-  const slot = Math.floor(index / 24);
-  const raan = (orbitalPlane * 15 + slot * 1.7) % 360;
-  const meanAnomaly = (slot * 51.4 + orbitalPlane * 4.2) % 360;
-
-  return {
-    id: `starlink-${satnum}`,
-    name: `STARLINK-${satnum}`,
-    tle1: tleLine1(satnum),
-    tle2: tleLine2(satnum, raan, meanAnomaly),
-  };
-});
+import type { ComputeSatellite, GroundStation, OrbitalWorkload } from "../types";
+export { cachedStarlinkTles } from "./starlinkSnapshot";
 
 export const groundStations: GroundStation[] = [
   { id: "riyadh", name: "Riyadh Ground Station", city: "Riyadh", lat: 24.7136, lng: 46.6753, bandwidthGbps: 2.4 },
