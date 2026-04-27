@@ -97,3 +97,45 @@ export type AdvisorRecommendation = {
   reason: string;
   tradeoff: string;
 };
+
+export type OrbitalWorkloadId = "llm" | "imagery" | "training" | "mining";
+
+export type OrbitalWorkload = {
+  id: OrbitalWorkloadId;
+  name: string;
+  requiredPowerKw: number;
+  latencySensitive: boolean;
+  description: string;
+  target: string;
+};
+
+export type GroundStation = {
+  id: string;
+  name: string;
+  city: string;
+  lat: number;
+  lng: number;
+  bandwidthGbps: number;
+};
+
+export type ComputeSatellite = {
+  id: string;
+  name: string;
+  orbitName: string;
+  altitudeKm: number;
+  inclinationDeg: number;
+  raanDeg: number;
+  phaseDeg: number;
+  gpuType: "H100" | "B200" | "Vera Rubin" | "Jetson Orin";
+  powerKw: number;
+  thermalCapacityKw: number;
+  sunlightPercent: number;
+  massKg: number;
+};
+
+export type TrackedTle = {
+  id: string;
+  name: string;
+  tle1: string;
+  tle2: string;
+};
