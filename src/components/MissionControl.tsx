@@ -18,7 +18,6 @@ import {
   Send,
   Sparkles,
   Sun,
-  SlidersHorizontal,
   Waves,
   X,
 } from "lucide-react";
@@ -28,12 +27,17 @@ import { cachedStarlinkTles, computeSatellites, groundStations, orbitalWorkloads
 import {
   buildDownlinkArcs,
   buildSunSyncPath,
+  buildOrbitalRouteAssignment,
   compareOrbitalToTerrestrial,
   createTrackedSatellites,
   groundStationPoints,
   projectComputeSatellite,
   propagateTrackedSatellites,
+  rankComputeSatellitesForWorkload,
+  type ComputeRoutingRole,
   type DownlinkArc,
+  type OrbitalRouteAssignment,
+  type OrbitalRouteStatus,
   type OrbitPoint,
 } from "../lib/orbit";
 import {
@@ -45,7 +49,7 @@ import {
 } from "../lib/planner";
 import { createSolarStormVfx, type SolarStormVfxHandle } from "../lib/solarStormVfx";
 import { getCachedSpaceWeatherScenario, loadSpaceWeatherScenario, type SpaceWeatherScenario } from "../lib/spaceWeather";
-import type { ComputeSatellite, OrbitalWorkload } from "../types";
+import type { OrbitalWorkload } from "../types";
 
 type MissionControlProps = {
   country: string;
@@ -56,6 +60,19 @@ type MissionControlProps = {
 type MissionMode = "plan" | "simulate";
 type PlanPriority = "solar" | "latency" | "cost";
 type AltitudePreset = 550 | 610 | 720;
+type SchedulerUrgency = "flash" | "priority" | "standard";
+type PassWindowTolerance = "strict" | "flex" | "hold";
+type SchedulerSnapshot = {
+  urgency: SchedulerUrgency;
+  dataVolumeTb: number;
+  deadlineMinutes: number;
+  passWindowTolerance: PassWindowTolerance;
+  splittable: boolean;
+  compressible: boolean;
+  bufferable: boolean;
+  priority: PlanPriority;
+  leoNodeCount: number;
+};
 
 type PlanMetrics = {
   totalSatellites: number;
@@ -70,12 +87,22 @@ const GLOBE_IMAGE_URL = "/assets/earth-day.jpg";
 const BACKGROUND_IMAGE_URL = "/assets/night-sky.png";
 const DEMO_ORBIT_START = Date.UTC(2026, 3, 28, 0, 0, 0);
 const DEFAULT_QUESTION =
-  "Where should I place an orbital AI data center to run LLM inference for users in Saudi Arabia with maximum solar uptime?";
+  "Split this incoming multi-company job queue across the moving LEO compute nodes based on each job's hardware, deadline, data-volume, and downlink constraints.";
 const ALTITUDE_PRESETS: AltitudePreset[] = [550, 610, 720];
 const PRIORITIES: Array<{ id: PlanPriority; label: string }> = [
-  { id: "solar", label: "Solar uptime" },
-  { id: "latency", label: "Latency" },
-  { id: "cost", label: "Cost" },
+  { id: "solar", label: "Power margin" },
+  { id: "latency", label: "Earliest downlink" },
+  { id: "cost", label: "Lowest cost" },
+];
+const URGENCY_LEVELS: Array<{ id: SchedulerUrgency; label: string; detail: string }> = [
+  { id: "flash", label: "Flash SLA", detail: "< 20 min" },
+  { id: "priority", label: "Priority", detail: "< 45 min" },
+  { id: "standard", label: "Standard", detail: "< 2 hr" },
+];
+const PASS_WINDOW_TOLERANCES: Array<{ id: PassWindowTolerance; label: string; detail: string }> = [
+  { id: "strict", label: "Strict", detail: "single pass" },
+  { id: "flex", label: "Flexible", detail: "+2 passes" },
+  { id: "hold", label: "Holdable", detail: "buffer ok" },
 ];
 const LAUNCH_COST_USD = 67_000_000;
 
@@ -132,19 +159,144 @@ function formatSeverity(scenario: SpaceWeatherScenario) {
   return `${scenario.severity.toUpperCase()} / ${Math.round(scenario.intensity * 100)}%`;
 }
 
+function formatCoordinate(value: number, axis: "lat" | "lng") {
+  const direction = axis === "lat" ? (value >= 0 ? "N" : "S") : value >= 0 ? "E" : "W";
+  return `${Math.abs(value).toFixed(1)} deg ${direction}`;
+}
+
 function globeVector(globe: GlobeMethods, lat: number, lng: number, altitude: number) {
   const coords = globe.getCoords(lat, lng, altitude);
   return new THREE.Vector3(coords.x, coords.y, coords.z);
 }
 
-function satelliteStatus(satellite: ComputeSatellite, workload: OrbitalWorkload) {
-  if (satellite.powerKw >= workload.requiredPowerKw && satellite.thermalCapacityKw >= workload.requiredPowerKw) {
-    return { label: "Nominal", className: "status-ok" };
+function routingRoleLabel(role: ComputeRoutingRole) {
+  if (role === "recommended") {
+    return "Recommended";
   }
-  if (satellite.powerKw + 8 >= workload.requiredPowerKw) {
-    return { label: "Cluster", className: "status-warn" };
+  if (role === "backup") {
+    return "Backup";
   }
-  return { label: "Reserve", className: "status-cold" };
+  return "Degraded";
+}
+
+function routingRoleClass(role: ComputeRoutingRole) {
+  if (role === "recommended") {
+    return "status-ok";
+  }
+  if (role === "backup") {
+    return "status-warn";
+  }
+  return "status-danger";
+}
+
+function routeStatusClass(status: OrbitalRouteStatus | ComputeRoutingRole) {
+  if (status === "ready" || status === "recommended") {
+    return "status-ok";
+  }
+  if (status === "backup" || status === "hold") {
+    return "status-warn";
+  }
+  if (status === "degraded") {
+    return "status-danger";
+  }
+  return "status-cold";
+}
+
+function routeRoleForSatellite(route: OrbitalRouteAssignment | null, satelliteId: string): ComputeRoutingRole | null {
+  if (!route) {
+    return null;
+  }
+  if (route.recommendedNode.satellite.id === satelliteId) {
+    return "recommended";
+  }
+  if (route.backupNode?.satellite.id === satelliteId) {
+    return "backup";
+  }
+  if (route.degradedNodes.some((node) => node.satellite.id === satelliteId)) {
+    return "degraded";
+  }
+  return null;
+}
+
+type OperationalPlaybookItem = {
+  action: string;
+  target: string;
+  status: "ready" | "active" | "warn" | "hold";
+  detail: string;
+};
+
+function buildOperationalPlaybook(
+  stormActive: boolean,
+  route: OrbitalRouteAssignment | null,
+  workload: OrbitalWorkload,
+): OperationalPlaybookItem[] {
+  const recommended = route?.recommendedNode.satellite.name ?? "best ranked LEO node";
+  const backup = route?.backupNode?.satellite.name ?? "backup LEO node";
+  const primaryGround = route?.selectedGroundStation.city ?? "primary ground station";
+  const backupGround = route?.backupGroundStation?.city ?? "backup ground station";
+  const routeActions = new Set(route?.actions ?? ["assign"]);
+  const urgentWorkload =
+    workload.id === "auto"
+      ? "highest-priority company jobs"
+      : workload.id === "imagery"
+        ? "urgent imagery triage"
+        : workload.name.toLowerCase();
+
+  if (stormActive) {
+    return [
+      {
+        action: "Pause",
+        target: "Photonix Dawn-2",
+        status: "warn",
+        detail: "Stop non-critical queues during elevated radiation exposure.",
+      },
+      {
+        action: routeActions.has("migrate") ? "Migrate" : "Assign",
+        target: recommended,
+        status: "active",
+        detail: `Move ${urgentWorkload} to the healthiest available node.`,
+      },
+      {
+        action: routeActions.has("compress") ? "Compress" : "Buffer",
+        target: "Lower-priority data",
+        status: routeActions.has("buffer") ? "hold" : "ready",
+        detail: "Downlink derived products first; hold bulk payloads if pass margin tightens.",
+      },
+      {
+        action: "Route",
+        target: `${primaryGround} / ${backupGround}`,
+        status: "active",
+        detail: "Send urgent results through primary ground, keep backup armed.",
+      },
+    ];
+  }
+
+  return [
+    {
+      action: "Assign",
+      target: recommended,
+      status: "ready",
+      detail: `Keep ${workload.name.toLowerCase()} on the current recommended route.`,
+    },
+    {
+      action: routeActions.has("compress") ? "Compress" : "Monitor",
+      target: "Queue and link",
+      status: "ready",
+      detail: "Watch queue load, thermal margin, and link quality before handoff.",
+    },
+    {
+      action: routeActions.has("split") ? "Split" : "Standby",
+      target: backup,
+      status: routeActions.has("split") ? "active" : "ready",
+      detail: "Keep backup compute warm for burst or degraded route conditions.",
+    },
+    {
+      action: routeActions.has("buffer") || routeActions.has("hold") ? "Buffer" : "Route",
+      target: primaryGround,
+      status: routeActions.has("buffer") || routeActions.has("hold") ? "hold" : "ready",
+      detail: `${route?.estimatedNextHandoffMinutes ?? 0} min modeled handoff; backup ground remains available.`,
+    },
+  ];
 }
 
 function makeTextSprite(text: string, color: string) {
@@ -262,7 +414,15 @@ function calculatePlanMetrics(
 }
 
 function priorityLabel(priority: PlanPriority | PlannerRequest["constellation"]["priority"]) {
-  return PRIORITIES.find((item) => item.id === priority)?.label ?? "Solar uptime";
+  return PRIORITIES.find((item) => item.id === priority)?.label ?? "Power margin";
+}
+
+function urgencyLabel(urgency: SchedulerUrgency) {
+  return URGENCY_LEVELS.find((item) => item.id === urgency)?.label ?? "Priority";
+}
+
+function passToleranceLabel(tolerance: PassWindowTolerance) {
+  return PASS_WINDOW_TOLERANCES.find((item) => item.id === tolerance)?.label ?? "Flexible";
 }
 
 function plannerSourceLabel(response: PlannerResponse | null) {
@@ -282,16 +442,35 @@ function plannerSourceClass(response: PlannerResponse | null) {
 }
 
 function sectionBadge(section: PlannerSection) {
-  if (section.title === "Cost/Water Impact") {
+  if (section.title === "Ground Comparison") {
     return "Modeled economics";
   }
-  if (section.title === "Downlink Plan") {
+  if (section.title === "Communication/Downlink Plan") {
     return "Modeled windows";
   }
-  if (section.title === "Risk Notes") {
+  if (section.title === "Risk/Assumptions") {
     return "Guardrail";
   }
+  if (section.title === "Next Action") {
+    return "Ops step";
+  }
   return null;
+}
+
+function workloadRoutingQuestion(workload: OrbitalWorkload) {
+  if (workload.id === "auto") {
+    return DEFAULT_QUESTION;
+  }
+
+  if (workload.id === "imagery") {
+    return "Assign this incoming disaster-response imagery workload to the best moving LEO compute node for GCC triage and downlink.";
+  }
+
+  if (workload.id === "llm") {
+    return "Evaluate this experimental LLM inference workload as a secondary queue on the moving LEO compute nodes.";
+  }
+
+  return `Assign this incoming ${workload.name.toLowerCase()} workload to the best moving LEO compute node for the GCC.`;
 }
 
 export function MissionControl({ country, logoTransitioning = false, onBackToGlobe }: MissionControlProps) {
@@ -303,11 +482,18 @@ export function MissionControl({ country, logoTransitioning = false, onBackToGlo
   const stormLastFrameRef = useRef<number | null>(null);
   const [clock, setClock] = useState(() => new Date());
   const [activeMode, setActiveMode] = useState<MissionMode>("plan");
-  const [selectedWorkloadId, setSelectedWorkloadId] = useState<OrbitalWorkload["id"]>("llm");
+  const [selectedWorkloadId, setSelectedWorkloadId] = useState<OrbitalWorkload["id"]>("auto");
   const [orbitalPlanes, setOrbitalPlanes] = useState(2);
   const [satellitesPerPlane, setSatellitesPerPlane] = useState(3);
   const [altitudeKm, setAltitudeKm] = useState<AltitudePreset>(550);
   const [planPriority, setPlanPriority] = useState<PlanPriority>("solar");
+  const [schedulerUrgency, setSchedulerUrgency] = useState<SchedulerUrgency>("priority");
+  const [dataVolumeTb, setDataVolumeTb] = useState(42);
+  const [deadlineMinutes, setDeadlineMinutes] = useState(45);
+  const [passWindowTolerance, setPassWindowTolerance] = useState<PassWindowTolerance>("flex");
+  const [workloadSplittable, setWorkloadSplittable] = useState(true);
+  const [workloadCompressible, setWorkloadCompressible] = useState(true);
+  const [workloadBufferable, setWorkloadBufferable] = useState(false);
   const [simulationOffsetHours, setSimulationOffsetHours] = useState(0);
   const [simulationPlaying, setSimulationPlaying] = useState(false);
   const [stormActive, setStormActive] = useState(false);
@@ -317,6 +503,7 @@ export function MissionControl({ country, logoTransitioning = false, onBackToGlo
   const [plannerResponse, setPlannerResponse] = useState<PlannerResponse | null>(null);
   const [lastPlannerQuestion, setLastPlannerQuestion] = useState("");
   const [lastPlannerRequest, setLastPlannerRequest] = useState<PlannerRequest | null>(null);
+  const [lastSchedulerSnapshot, setLastSchedulerSnapshot] = useState<SchedulerSnapshot | null>(null);
   const [planWindowOpen, setPlanWindowOpen] = useState(false);
   const [selectedSatelliteId, setSelectedSatelliteId] = useState("compute-a");
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -331,11 +518,9 @@ export function MissionControl({ country, logoTransitioning = false, onBackToGlo
     () => new Date(DEMO_ORBIT_START + simulationOffsetHours * 60 * 60 * 1000),
     [simulationOffsetHours],
   );
+  const planComputeDate = useMemo(() => new Date(DEMO_ORBIT_START), []);
   const starlinkPropagationDate = activeMode === "simulate" ? simulationDate : clock;
-  const computePropagationDate = useMemo(
-    () => (activeMode === "simulate" ? simulationDate : new Date(DEMO_ORBIT_START)),
-    [activeMode, simulationDate],
-  );
+  const computePropagationDate = activeMode === "simulate" ? simulationDate : planComputeDate;
   const planMetrics = useMemo(
     () => calculatePlanMetrics(orbitalPlanes, satellitesPerPlane, altitudeKm, planPriority),
     [altitudeKm, orbitalPlanes, planPriority, satellitesPerPlane],
@@ -348,6 +533,29 @@ export function MissionControl({ country, logoTransitioning = false, onBackToGlo
   const computePoints = useMemo(
     () => computeSatellites.map((satellite) => projectComputeSatellite(satellite, computePropagationDate)),
     [computePropagationDate],
+  );
+  const schedulerSnapshot = useMemo(
+    () => ({
+      urgency: schedulerUrgency,
+      dataVolumeTb,
+      deadlineMinutes,
+      passWindowTolerance,
+      splittable: workloadSplittable,
+      compressible: workloadCompressible,
+      bufferable: workloadBufferable,
+      priority: planPriority,
+      leoNodeCount: computeSatellites.length,
+    }),
+    [
+      dataVolumeTb,
+      deadlineMinutes,
+      passWindowTolerance,
+      planPriority,
+      schedulerUrgency,
+      workloadBufferable,
+      workloadCompressible,
+      workloadSplittable,
+    ],
   );
   const groundPoints = useMemo(() => groundStationPoints(groundStations), []);
   const allPoints = useMemo(
@@ -393,6 +601,16 @@ export function MissionControl({ country, logoTransitioning = false, onBackToGlo
       thermalCapacityKw: satellite.thermalCapacityKw,
       sunlightPercent: satellite.sunlightPercent,
       massKg: satellite.massKg,
+      health: {
+        thermalLoadPercent: satellite.health.thermalLoadPercent,
+        thermalMarginKw: satellite.health.thermalMarginKw,
+        computeLoadPercent: satellite.health.computeLoadPercent,
+        computeHeadroomPercent: satellite.health.computeHeadroomPercent,
+        queueLoadPercent: satellite.health.queueLoadPercent,
+        radiationRiskPercent: satellite.health.radiationRiskPercent,
+        linkQualityPercent: satellite.health.linkQualityPercent,
+        linkReady: satellite.health.linkReady,
+      },
     })),
     groundStations: groundStations.map((station) => ({
       id: station.id,
@@ -402,31 +620,112 @@ export function MissionControl({ country, logoTransitioning = false, onBackToGlo
       lng: station.lng,
       bandwidthGbps: station.bandwidthGbps,
     })),
+    scheduler: schedulerSnapshot,
+    routeAssignment: orbitalRouteAssignment
+      ? {
+          recommendedSatelliteId: orbitalRouteAssignment.recommendedNode.satellite.id,
+          recommendedSatelliteName: orbitalRouteAssignment.recommendedNode.satellite.name,
+          backupSatelliteId: orbitalRouteAssignment.backupNode?.satellite.id,
+          backupSatelliteName: orbitalRouteAssignment.backupNode?.satellite.name,
+          degradedSatelliteIds: orbitalRouteAssignment.degradedNodes.map((node) => node.satellite.id),
+          selectedGroundStationId: orbitalRouteAssignment.selectedGroundStation.id,
+          selectedGroundStationCity: orbitalRouteAssignment.selectedGroundStation.city,
+          backupGroundStationId: orbitalRouteAssignment.backupGroundStation?.id,
+          backupGroundStationCity: orbitalRouteAssignment.backupGroundStation?.city,
+          routeScore: orbitalRouteAssignment.routeScore,
+          status: orbitalRouteAssignment.status,
+          mode: orbitalRouteAssignment.mode,
+          actions: orbitalRouteAssignment.actions,
+          estimatedNextHandoffMinutes: orbitalRouteAssignment.estimatedNextHandoffMinutes,
+          reasons: orbitalRouteAssignment.reasons,
+          riskNotes: orbitalRouteAssignment.riskNotes,
+        }
+      : null,
   });
+  const selectedSatellite = computeSatellites.find((satellite) => satellite.id === selectedSatelliteId) ?? computeSatellites[0];
+  const rankedComputeSatellites = useMemo(
+    () => rankComputeSatellitesForWorkload(computeSatellites, selectedWorkload),
+    [selectedWorkload],
+  );
+  const orbitalRouteAssignment = useMemo(
+    () =>
+      buildOrbitalRouteAssignment({
+        computePoints,
+        groundStations,
+        rankedComputeSatellites,
+        workload: selectedWorkload,
+        constraints: schedulerSnapshot,
+        stormActive,
+      }),
+    [computePoints, rankedComputeSatellites, schedulerSnapshot, selectedWorkload, stormActive],
+  );
+  const routeArcs = useMemo<DownlinkArc[]>(() => {
+    if (!orbitalRouteAssignment) {
+      return [];
+    }
+
+    return orbitalRouteAssignment.paths.map((path) => {
+      const degraded = orbitalRouteAssignment.degradedNodes.some((node) => node.satellite.id === path.satelliteId);
+      const colors =
+        path.kind === "migration"
+          ? ["rgba(239, 68, 68, 0.92)", "rgba(52, 211, 153, 0.9)"]
+          : degraded
+            ? ["rgba(239, 68, 68, 0.92)", "rgba(245, 184, 75, 0.84)"]
+            : path.kind === "backup"
+              ? ["rgba(245, 184, 75, 0.86)", "rgba(34, 211, 238, 0.82)"]
+              : ["rgba(52, 211, 153, 0.94)", "rgba(54, 242, 192, 0.88)"];
+
+      return {
+        id: path.id,
+        satelliteId: path.satelliteId,
+        groundStationId: path.groundStationId,
+        startLat: path.startLat,
+        startLng: path.startLng,
+        startAlt: path.startAlt,
+        endLat: path.endLat,
+        endLng: path.endLng,
+        endAlt: path.endAlt,
+        color: colors,
+        label: path.label,
+      };
+    });
+  }, [orbitalRouteAssignment]);
+  const visibleDownlinkArcs = activeMode === "plan" ? routeArcs : downlinkArcs;
   const activePlannerRequest = lastPlannerRequest ?? createPlannerRequest(question.trim() || DEFAULT_QUESTION);
+  const activeSchedulerSnapshot = lastSchedulerSnapshot ?? schedulerSnapshot;
   const activePlannerQuestion = lastPlannerQuestion || activePlannerRequest.question;
   const planWindowAvailable = Boolean(plannerResponse);
   const quickPlannerActions = [
     {
-      label: "Optimize latency",
-      question: `Optimize this ${selectedWorkload.name.toLowerCase()} orbital AI data center plan for lowest practical Riyadh and Dubai latency.`,
+      label: "Pick best node",
+      question: `Select the best moving LEO compute node for the incoming ${selectedWorkload.name.toLowerCase()} workload and explain the assignment.`,
     },
     {
-      label: "Compare orbits",
-      question: `Compare 550 km, 610 km, and 720 km options for ${selectedWorkload.name.toLowerCase()} using the current constellation settings.`,
+      label: "Compare paths",
+      question: `Compare the current LEO compute paths for ${selectedWorkload.name.toLowerCase()} using power margin, sunlight, and downlink timing.`,
     },
     {
       label: "Explain risks",
-      question: `Explain the highest-risk assumptions in this ${selectedWorkload.name.toLowerCase()} mission plan for Saudi Arabia.`,
+      question: `Explain the highest-risk assumptions when routing this ${selectedWorkload.name.toLowerCase()} workload through moving LEO compute nodes.`,
     },
     {
-      label: "Pitch summary",
-      question: `Write a concise investor-style mission plan summary for this ${selectedWorkload.name.toLowerCase()} Photonix scenario.`,
+      label: "Ops summary",
+      question: `Write a concise operations summary for assigning this ${selectedWorkload.name.toLowerCase()} workload to Photonix LEO compute.`,
     },
   ];
-  const selectedSatellite = computeSatellites.find((satellite) => satellite.id === selectedSatelliteId) ?? computeSatellites[0];
+  const selectedRanking =
+    rankedComputeSatellites.find((item) => item.satellite.id === selectedSatellite.id) ?? rankedComputeSatellites[0];
+  const selectedRouteRole = routeRoleForSatellite(orbitalRouteAssignment, selectedSatellite.id) ?? selectedRanking?.role ?? null;
+  const selectedComputePoint =
+    computePoints.find((point) => point.id === selectedSatellite.id) ??
+    projectComputeSatellite(selectedSatellite, computePropagationDate);
+  const nodePositionLabel = activeMode === "simulate" ? "Sim" : "Live";
+  const operationalPlaybook = useMemo(
+    () => buildOperationalPlaybook(stormActive, orbitalRouteAssignment, selectedWorkload),
+    [orbitalRouteAssignment, selectedWorkload, stormActive],
+  );
   const activeCompute = missionActive || activeMode === "simulate"
-    ? computeSatellites.slice(0, selectedWorkload.id === "training" ? 3 : 2)
+    ? computeSatellites.slice(0, selectedWorkload.id === "training" || selectedWorkload.id === "auto" ? 3 : 2)
     : [];
   const spaceWeatherModeLabel = spaceWeatherScenario.mode === "live" ? "Live NASA" : "Cached NASA";
   const spaceWeatherSourceLabel = `${spaceWeatherScenario.provider} ${spaceWeatherScenario.mode === "live" ? "live feed" : "scenario"}`;
@@ -586,9 +885,18 @@ export function MissionControl({ country, logoTransitioning = false, onBackToGlo
     stormVfx.setImpactPosition(globeVector(globe, atRiskPoint.lat, atRiskPoint.lng, atRiskPoint.altitude + 0.2));
   }, [computePoints, stormActive]);
 
-  const runPlanner = (overrideQuestion?: string) => {
+  const schedulerBehaviorSummary = (snapshot: SchedulerSnapshot) => [
+    snapshot.splittable ? "splittable" : "atomic",
+    snapshot.compressible ? "compressible" : "raw",
+    snapshot.bufferable ? "bufferable" : "live handoff",
+  ].join(" / ");
+
+  const withSchedulerContext = (plannerQuestion: string, snapshot: SchedulerSnapshot) =>
+    `${plannerQuestion}\n\nOperational scheduler constraints: ${urgencyLabel(snapshot.urgency)} urgency, ${snapshot.dataVolumeTb} TB input, ${snapshot.deadlineMinutes} minute deadline, ${passToleranceLabel(snapshot.passWindowTolerance).toLowerCase()} pass-window tolerance, ${schedulerBehaviorSummary(snapshot)} workload behavior, ${priorityLabel(snapshot.priority).toLowerCase()} route priority, and ${snapshot.leoNodeCount} active LEO compute nodes.`;
+
+  const runPlanner = (overrideQuestion?: string, schedulerOverride = schedulerSnapshot) => {
     const trimmedQuestion = overrideQuestion?.trim() || question.trim() || DEFAULT_QUESTION;
-    const requestBody = createPlannerRequest(trimmedQuestion);
+    const requestBody = createPlannerRequest(withSchedulerContext(trimmedQuestion, schedulerOverride));
     const requestId = plannerRequestIdRef.current + 1;
     const controller = new AbortController();
 
@@ -602,6 +910,7 @@ export function MissionControl({ country, logoTransitioning = false, onBackToGlo
     setPlanWindowOpen(false);
     setLastPlannerQuestion(trimmedQuestion);
     setLastPlannerRequest(requestBody);
+    setLastSchedulerSnapshot(schedulerOverride);
     setSidebarOpen(true);
     setSelectedSatelliteId("compute-a");
     globeRef.current?.pointOfView({ lat: 24.8, lng: 50.2, altitude: 1.38 }, 1100);
@@ -646,15 +955,34 @@ export function MissionControl({ country, logoTransitioning = false, onBackToGlo
     })();
   };
 
-  const runGccLlmScenario = () => {
+  const runAutoQueueScenario = () => {
+    const demoSchedulerSnapshot: SchedulerSnapshot = {
+      urgency: "priority",
+      dataVolumeTb: 42,
+      deadlineMinutes: 45,
+      passWindowTolerance: "flex",
+      splittable: true,
+      compressible: true,
+      bufferable: false,
+      priority: "solar",
+      leoNodeCount: computeSatellites.length,
+    };
+
     setActiveMode("plan");
-    setSelectedWorkloadId("llm");
+    setSelectedWorkloadId("auto");
     setOrbitalPlanes(2);
     setSatellitesPerPlane(3);
     setAltitudeKm(550);
     setPlanPriority("solar");
+    setSchedulerUrgency(demoSchedulerSnapshot.urgency);
+    setDataVolumeTb(demoSchedulerSnapshot.dataVolumeTb);
+    setDeadlineMinutes(demoSchedulerSnapshot.deadlineMinutes);
+    setPassWindowTolerance(demoSchedulerSnapshot.passWindowTolerance);
+    setWorkloadSplittable(demoSchedulerSnapshot.splittable);
+    setWorkloadCompressible(demoSchedulerSnapshot.compressible);
+    setWorkloadBufferable(demoSchedulerSnapshot.bufferable);
     setQuestion(DEFAULT_QUESTION);
-    runPlanner(DEFAULT_QUESTION);
+    runPlanner(DEFAULT_QUESTION, demoSchedulerSnapshot);
   };
 
   const pointLabel = (point: object) => {
@@ -743,7 +1071,7 @@ export function MissionControl({ country, logoTransitioning = false, onBackToGlo
                 setSelectedSatelliteId(item.id);
               }
             }}
-            arcsData={downlinkArcs}
+            arcsData={visibleDownlinkArcs}
             arcStartLat={(arc: object) => (arc as DownlinkArc).startLat}
             arcStartLng={(arc: object) => (arc as DownlinkArc).startLng}
             arcStartAltitude={(arc: object) => (arc as DownlinkArc).startAlt}
@@ -781,7 +1109,7 @@ export function MissionControl({ country, logoTransitioning = false, onBackToGlo
             }}
             objectLabel={(point) => {
               const item = point as OrbitPoint;
-              return `${item.name}<br/>Orbital AI data center<br/>${item.satellite?.gpuType ?? "GPU"} compute node`;
+              return `${item.name}<br/>Moving LEO AI data center<br/>${formatCoordinate(item.lat, "lat")} / ${formatCoordinate(item.lng, "lng")}<br/>${item.satellite?.gpuType ?? "GPU"} compute node`;
             }}
             onObjectClick={(point) => {
               const item = point as OrbitPoint;
@@ -807,10 +1135,10 @@ export function MissionControl({ country, logoTransitioning = false, onBackToGlo
           <button
             type="button"
             className="mission-demo-cta absolute z-20"
-            onClick={runGccLlmScenario}
+            onClick={runAutoQueueScenario}
           >
             <Sparkles size={15} />
-            Run GCC LLM scenario
+            Route job queue
           </button>
           {(thinking || planWindowAvailable) && (
             <button
@@ -832,18 +1160,18 @@ export function MissionControl({ country, logoTransitioning = false, onBackToGlo
           <div className="mission-telemetry absolute bottom-5 left-5 right-5 z-20 grid gap-3 sm:grid-cols-3">
             <Telemetry
               icon={<Satellite size={16} />}
-              label={activeMode === "simulate" ? "Simulation time" : "Plan constellation"}
-              value={activeMode === "simulate" ? `+${simulationOffsetHours}h` : `${planMetrics.totalSatellites} sats`}
+              label={activeMode === "simulate" ? "Simulation time" : "Queue volume"}
+              value={activeMode === "simulate" ? `+${simulationOffsetHours}h` : `${schedulerSnapshot.dataVolumeTb} TB`}
             />
             <Telemetry
               icon={<RadioTower size={16} />}
-              label={activeMode === "simulate" ? "Ops state" : "Launch manifest"}
-              value={activeMode === "simulate" ? (stormActive ? "CME event" : "Nominal") : `${planMetrics.launches} launches`}
+              label={activeMode === "simulate" ? "Ops state" : "Queue SLA"}
+              value={activeMode === "simulate" ? (stormActive ? "CME event" : "Nominal") : `${schedulerSnapshot.deadlineMinutes} min SLA`}
             />
             <Telemetry
               icon={<Sun size={16} />}
-              label={activeMode === "simulate" ? "Workload routing" : "Modeled uptime"}
-              value={activeMode === "simulate" ? (stormActive ? "Migrated" : "Primary") : `${planMetrics.solarUptime}% solar`}
+              label={activeMode === "simulate" ? "Workload routing" : "Route priority"}
+              value={activeMode === "simulate" ? (stormActive ? "Migrated" : "Primary") : priorityLabel(schedulerSnapshot.priority)}
             />
           </div>
         </div>
@@ -903,86 +1231,16 @@ export function MissionControl({ country, logoTransitioning = false, onBackToGlo
                       type="button"
                       onClick={() => {
                         setSelectedWorkloadId(workload.id);
-                        setQuestion(
-                          workload.id === "llm"
-                            ? DEFAULT_QUESTION
-                            : `Plan orbital AI data center capacity for ${workload.name.toLowerCase()} serving the GCC.`,
-                        );
+                        setQuestion(workloadRoutingQuestion(workload));
                       }}
                       className={`workload-option ${workload.id === selectedWorkloadId ? "is-selected" : ""}`}
                     >
                       <span>{workload.name}</span>
-                      <small>{workload.requiredPowerKw} kW target</small>
+                      <small>{workload.id === "auto" ? "job constraints" : `${workload.requiredPowerKw} kW target`}</small>
                     </button>
                   ))}
                 </div>
                 <p className="mt-3 text-sm leading-6 text-slate-300">{selectedWorkload.description}</p>
-              </section>
-
-              <section className="mission-card">
-                <div className="mission-card-title">
-                  <SlidersHorizontal size={17} />
-                  Constellation Builder
-                </div>
-                <div className="builder-grid">
-                  <label>
-                    <span>Orbital planes</span>
-                    <input
-                      type="number"
-                      min={1}
-                      max={8}
-                      value={orbitalPlanes}
-                      onChange={(event) => setOrbitalPlanes(Math.min(8, Math.max(1, Number(event.target.value) || 1)))}
-                    />
-                  </label>
-                  <label>
-                    <span>Sats per plane</span>
-                    <input
-                      type="number"
-                      min={1}
-                      max={12}
-                      value={satellitesPerPlane}
-                      onChange={(event) => setSatellitesPerPlane(Math.min(12, Math.max(1, Number(event.target.value) || 1)))}
-                    />
-                  </label>
-                </div>
-                <div className="control-block">
-                  <span>Altitude preset</span>
-                  <div className="segmented-grid">
-                    {ALTITUDE_PRESETS.map((preset) => (
-                      <button
-                        key={preset}
-                        type="button"
-                        className={altitudeKm === preset ? "is-selected" : ""}
-                        onClick={() => setAltitudeKm(preset)}
-                      >
-                        {preset} km
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                <div className="control-block">
-                  <span>Optimization priority</span>
-                  <div className="segmented-grid">
-                    {PRIORITIES.map((priority) => (
-                      <button
-                        key={priority.id}
-                        type="button"
-                        className={planPriority === priority.id ? "is-selected" : ""}
-                        onClick={() => setPlanPriority(priority.id)}
-                      >
-                        {priority.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                <div className="comparison-grid">
-                  <Metric label="Total sats" value={`${planMetrics.totalSatellites}`} />
-                  <Metric label="Launches" value={`${planMetrics.launches}`} />
-                  <Metric label="Launch cost" value={formatCurrency(planMetrics.launchCost)} />
-                  <Metric label="Solar uptime" value={`${planMetrics.solarUptime}%`} />
-                  <Metric label="GCC coverage" value={`${planMetrics.coverageScore}%`} />
-                </div>
               </section>
 
               <section className="mission-card mission-plan-card">
@@ -1021,22 +1279,23 @@ export function MissionControl({ country, logoTransitioning = false, onBackToGlo
                       </button>
                     ))}
                   </div>
-                  <button type="submit" className="mission-send" aria-label="Ask mission planner">
+                  <button
+                    type="submit"
+                    className={`mission-send ${plannerResponse && !thinking ? "is-generated" : ""}`}
+                    aria-label="Ask mission planner"
+                  >
                     <Send size={16} />
-                    Generate Mission Plan
+                    {plannerResponse && !thinking ? "Regenerate Mission Plan" : "Generate Mission Plan"}
                   </button>
                 </form>
 
                 <div className="planner-config-strip" aria-label="Planner config snapshot">
                   <PlannerChip label="Workload" value={activePlannerRequest.workload.name} />
-                  <PlannerChip
-                    label="Constellation"
-                    value={`${activePlannerRequest.constellation.orbitalPlanes} x ${activePlannerRequest.constellation.satellitesPerPlane} sats`}
-                  />
-                  <PlannerChip label="Orbit" value={`${activePlannerRequest.constellation.altitudeKm} km`} />
-                  <PlannerChip label="Priority" value={priorityLabel(activePlannerRequest.constellation.priority)} />
-                  <PlannerChip label="Solar" value={`${activePlannerRequest.metrics.solarUptime}%`} />
-                  <PlannerChip label="Coverage" value={`${activePlannerRequest.metrics.coverageScore}%`} />
+                  <PlannerChip label="Volume" value={`${activeSchedulerSnapshot.dataVolumeTb} TB`} />
+                  <PlannerChip label="Deadline" value={`${activeSchedulerSnapshot.deadlineMinutes} min`} />
+                  <PlannerChip label="Priority" value={priorityLabel(activeSchedulerSnapshot.priority)} />
+                  <PlannerChip label="Tolerance" value={passToleranceLabel(activeSchedulerSnapshot.passWindowTolerance)} />
+                  <PlannerChip label="LEO nodes" value={`${activeSchedulerSnapshot.leoNodeCount}`} />
                 </div>
 
                 {thinking && (
@@ -1048,13 +1307,6 @@ export function MissionControl({ country, logoTransitioning = false, onBackToGlo
 
                 {!thinking && plannerResponse && (
                   <div className="mission-plan-output is-compact">
-                    <div className="mission-plan-summary">
-                      <div>
-                        <span>Plan generated</span>
-                        <strong>{plannerResponse.summary}</strong>
-                      </div>
-                      <em>{plannerResponse.confidence} confidence</em>
-                    </div>
                     <button type="button" className="planner-open-button" onClick={() => setPlanWindowOpen(true)}>
                       <Maximize2 size={16} />
                       View Full Plan
@@ -1065,7 +1317,7 @@ export function MissionControl({ country, logoTransitioning = false, onBackToGlo
                 {!thinking && !plannerResponse && (
                   <div className="planner-empty-state">
                     <strong>Planner ready</strong>
-                    <p>Generate a mission plan from the selected workload, orbit, constellation, and priority.</p>
+                    <p>Generate a routing recommendation from the selected job queue, modeled constraints, and active LEO node set.</p>
                   </div>
                 )}
               </section>
@@ -1076,9 +1328,11 @@ export function MissionControl({ country, logoTransitioning = false, onBackToGlo
                   Orbital AI Data Centers
                 </div>
                 <div className="satellite-list">
-                  {computeSatellites.map((satellite) => {
-                    const status = satelliteStatus(satellite, selectedWorkload);
+                  {rankedComputeSatellites.map((ranking) => {
+                    const { satellite } = ranking;
                     const selected = satellite.id === selectedSatellite.id;
+                    const health = satellite.health;
+                    const routeRole = routeRoleForSatellite(orbitalRouteAssignment, satellite.id) ?? ranking.role;
                     return (
                       <button
                         key={satellite.id}
@@ -1089,17 +1343,36 @@ export function MissionControl({ country, logoTransitioning = false, onBackToGlo
                         <span>
                           <strong>{satellite.name}</strong>
                           <small>{satellite.gpuType} / {satellite.orbitName}</small>
+                          <small className="satellite-row-health">
+                            Score {ranking.score} / T {health.thermalLoadPercent}% / Q {health.queueLoadPercent}% / Link {health.linkQualityPercent}%
+                          </small>
                         </span>
-                        <em className={status.className}>{status.label}</em>
+                        <em className={routingRoleClass(routeRole)}>#{ranking.rank} {routingRoleLabel(routeRole)}</em>
                       </button>
                     );
                   })}
                 </div>
                 <div className="spec-grid">
+                  <Spec
+                    label="Routing rank"
+                    value={selectedRanking ? `#${selectedRanking.rank} ${routingRoleLabel(selectedRanking.role)}` : "N/A"}
+                  />
+                  <Spec label="Active route role" value={selectedRouteRole ? routingRoleLabel(selectedRouteRole) : "N/A"} />
+                  <Spec label="Health score" value={selectedRanking ? `${selectedRanking.score}/100` : "N/A"} />
                   <Spec label="Power" value={`${selectedSatellite.powerKw} kW`} />
                   <Spec label="Thermal" value={`${selectedSatellite.thermalCapacityKw} kW`} />
+                  <Spec label="Power margin" value={selectedRanking ? `${selectedRanking.powerMarginKw} kW` : "N/A"} />
+                  <Spec label="Thermal margin" value={selectedRanking ? `${selectedRanking.thermalMarginKw} kW` : "N/A"} />
+                  <Spec label="Battery" value={`${selectedSatellite.health.batteryPercent}%`} />
+                  <Spec label="Compute headroom" value={`${selectedSatellite.health.computeHeadroomPercent}%`} />
+                  <Spec label="Queue load" value={`${selectedSatellite.health.queueLoadPercent}%`} />
+                  <Spec label="Radiation risk" value={`${selectedSatellite.health.radiationRiskPercent}%`} />
+                  <Spec label="Link quality" value={`${selectedSatellite.health.linkQualityPercent}%`} />
+                  <Spec label="Link state" value={selectedSatellite.health.linkReady ? "Ready" : "Standby"} />
                   <Spec label="Sunlight" value={`${selectedSatellite.sunlightPercent}%`} />
                   <Spec label="Inclination" value={`${selectedSatellite.inclinationDeg} deg`} />
+                  <Spec label={`${nodePositionLabel} lat`} value={formatCoordinate(selectedComputePoint.lat, "lat")} />
+                  <Spec label={`${nodePositionLabel} lng`} value={formatCoordinate(selectedComputePoint.lng, "lng")} />
                 </div>
               </section>
 
@@ -1130,9 +1403,25 @@ export function MissionControl({ country, logoTransitioning = false, onBackToGlo
                   Downlink Windows
                 </div>
                 <div className="timeline-list">
-                  <Timeline city="Riyadh" next="14 min" duration="8 min" active={missionActive} />
-                  <Timeline city="Dubai" next="18 min" duration="7 min" active={missionActive} />
-                  <Timeline city="Abu Dhabi" next="21 min" duration="6 min" active={missionActive} />
+                  {orbitalRouteAssignment?.paths.slice(0, 3).map((path) => {
+                    const station = groundStations.find((item) => item.id === path.groundStationId);
+                    return (
+                      <Timeline
+                        key={path.id}
+                        city={station?.city ?? path.groundStationId}
+                        next={`${path.estimatedHandoffMinutes} min`}
+                        duration={`${Math.max(4, Math.round(path.visibilityScore / 14))} min`}
+                        active={path.kind === "primary" || missionActive}
+                      />
+                    );
+                  })}
+                  {!orbitalRouteAssignment && (
+                    <>
+                      <Timeline city="Riyadh" next="14 min" duration="8 min" active={missionActive} />
+                      <Timeline city="Dubai" next="18 min" duration="7 min" active={missionActive} />
+                      <Timeline city="Abu Dhabi" next="21 min" duration="6 min" active={missionActive} />
+                    </>
+                  )}
                 </div>
               </section>
             </>
@@ -1245,6 +1534,38 @@ export function MissionControl({ country, logoTransitioning = false, onBackToGlo
                 )}
               </section>
 
+              <section className="mission-card operational-playbook-card">
+                <div className="mission-card-title mission-card-title-with-badge">
+                  <Activity size={17} />
+                  Operational Playbook
+                  <span className={`route-status-badge ${stormActive ? "status-warn" : "status-ok"}`}>
+                    {stormActive ? "Storm response" : "Ready"}
+                  </span>
+                </div>
+                <div className="playbook-summary">
+                  <strong>
+                    {stormActive
+                      ? `Protect Dawn-2; route ${selectedWorkload.name.toLowerCase()} through ${orbitalRouteAssignment?.recommendedNode.satellite.name ?? "Dawn-1"}.`
+                      : `${orbitalRouteAssignment?.recommendedNode.satellite.name ?? "Primary node"} ready for ${selectedWorkload.name.toLowerCase()}.`}
+                  </strong>
+                  <span>
+                    {orbitalRouteAssignment
+                      ? `${orbitalRouteAssignment.selectedGroundStation.city} primary / ${orbitalRouteAssignment.backupGroundStation?.city ?? "backup ground"} backup`
+                      : "Route assignment pending"}
+                  </span>
+                </div>
+                <div className="playbook-list">
+                  {operationalPlaybook.map((item) => (
+                    <div key={`${item.action}-${item.target}`}>
+                      <span>{item.action}</span>
+                      <strong>{item.target}</strong>
+                      <em className={`playbook-state is-${item.status}`}>{item.status}</em>
+                      <small>{item.detail}</small>
+                    </div>
+                  ))}
+                </div>
+              </section>
+
               <section className="mission-card">
                 <div className="mission-card-title">
                   <Activity size={17} />
@@ -1260,7 +1581,7 @@ export function MissionControl({ country, logoTransitioning = false, onBackToGlo
                     <strong className={stormActive ? "status-danger" : "status-ok"}>{stormActive ? "At Risk" : "Nominal"}</strong>
                   </div>
                   <div>
-                    <span>LLM workload</span>
+                    <span>Job queue</span>
                     <strong className={stormActive ? "status-warn" : "status-ok"}>{stormActive ? "Migrating" : "Stable"}</strong>
                   </div>
                   <div>
@@ -1290,37 +1611,48 @@ export function MissionControl({ country, logoTransitioning = false, onBackToGlo
                   AI DC Routing
                 </div>
                 <div className="satellite-list">
-                  <button type="button" className="satellite-row is-selected" onClick={() => setSelectedSatelliteId("compute-a")}>
+                  <button
+                    type="button"
+                    className={`satellite-row ${selectedSatelliteId === "compute-a" ? "is-selected" : ""}`}
+                    onClick={() => setSelectedSatelliteId("compute-a")}
+                  >
                     <span>
                       <strong>Photonix Dawn-1</strong>
-                      <small>{stormActive ? "absorbing LLM inference queue" : "primary orbital DC path"}</small>
+                      <small>
+                        {stormActive
+                          ? "absorbing priority job queue"
+                          : orbitalRouteAssignment?.recommendedNode.satellite.id === "compute-a"
+                            ? "recommended orbital DC path"
+                            : "available orbital DC path"}
+                      </small>
                     </span>
-                    <em className={stormActive ? "status-ok" : "status-warn"}>{stormActive ? "Taking Over" : "Primary"}</em>
+                    <em className={stormActive ? "status-ok" : routeStatusClass(routeRoleForSatellite(orbitalRouteAssignment, "compute-a") ?? "backup")}>
+                      {stormActive ? "Taking Over" : routingRoleLabel(routeRoleForSatellite(orbitalRouteAssignment, "compute-a") ?? "backup")}
+                    </em>
                   </button>
-                  <button type="button" className="satellite-row" onClick={() => setSelectedSatelliteId("compute-b")}>
+                  <button
+                    type="button"
+                    className={`satellite-row ${selectedSatelliteId === "compute-b" ? "is-selected" : ""}`}
+                    onClick={() => setSelectedSatelliteId("compute-b")}
+                  >
                     <span>
                       <strong>Photonix Dawn-2</strong>
-                      <small>{stormActive ? "radiation exposure threshold exceeded" : "parallel orbital DC path"}</small>
+                      <small>
+                        {stormActive
+                          ? "radiation exposure threshold exceeded"
+                          : orbitalRouteAssignment?.backupNode?.satellite.id === "compute-b"
+                            ? "backup orbital DC path"
+                            : "parallel orbital DC path"}
+                      </small>
                     </span>
-                    <em className={stormActive ? "status-danger" : "status-ok"}>{stormActive ? "At Risk" : "Nominal"}</em>
+                    <em className={stormActive ? "status-danger" : routeStatusClass(routeRoleForSatellite(orbitalRouteAssignment, "compute-b") ?? "recommended")}>
+                      {stormActive ? "At Risk" : routingRoleLabel(routeRoleForSatellite(orbitalRouteAssignment, "compute-b") ?? "recommended")}
+                    </em>
                   </button>
                 </div>
               </section>
             </>
           )}
-
-          <section className="mission-card compact">
-            <div className="mission-card-title">
-              <Sparkles size={17} />
-              Demo Assumptions
-            </div>
-            <div className="assumption-list">
-              <span>Cached CelesTrak Starlink TLE snapshot, 168 satellites</span>
-              <span>DeepSeek V4 Flash planner with deterministic fallback; orbital metrics remain modeled</span>
-              <span>NASA DONKI space-weather scenario cached by default; live fetch requires VITE_NASA_API_KEY</span>
-              <span>Modeled GCC downlink windows for presentation</span>
-            </div>
-          </section>
         </aside>
       </section>
 
@@ -1364,18 +1696,15 @@ export function MissionControl({ country, logoTransitioning = false, onBackToGlo
 
               <div className="planner-config-strip plan-window-config" aria-label="Planner config used for generated plan">
                 <PlannerChip label="Workload" value={activePlannerRequest.workload.name} />
-                <PlannerChip
-                  label="Constellation"
-                  value={`${activePlannerRequest.constellation.orbitalPlanes} x ${activePlannerRequest.constellation.satellitesPerPlane} sats`}
-                />
-                <PlannerChip label="Orbit" value={`${activePlannerRequest.constellation.altitudeKm} km`} />
-                <PlannerChip label="Priority" value={priorityLabel(activePlannerRequest.constellation.priority)} />
-                <PlannerChip label="Solar" value={`${activePlannerRequest.metrics.solarUptime}%`} />
-                <PlannerChip label="Coverage" value={`${activePlannerRequest.metrics.coverageScore}%`} />
+                <PlannerChip label="Volume" value={`${activeSchedulerSnapshot.dataVolumeTb} TB`} />
+                <PlannerChip label="Deadline" value={`${activeSchedulerSnapshot.deadlineMinutes} min`} />
+                <PlannerChip label="Priority" value={priorityLabel(activeSchedulerSnapshot.priority)} />
+                <PlannerChip label="Tolerance" value={passToleranceLabel(activeSchedulerSnapshot.passWindowTolerance)} />
+                <PlannerChip label="LEO nodes" value={`${activeSchedulerSnapshot.leoNodeCount}`} />
               </div>
 
               <div className="plan-guardrail-strip">
-                Model response uses Photonix deterministic mission inputs. Cost, water, latency, pass windows, and regulatory statements remain modeled demo assumptions.
+                Model response uses Photonix deterministic mission inputs. Cost, water, latency, workload constraints, pass windows, and regulatory statements remain modeled demo assumptions.
               </div>
 
               <div className="mission-plan-sections plan-window-sections">

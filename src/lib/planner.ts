@@ -3,11 +3,12 @@ import type { ComputeSatellite, GroundStation, OrbitalWorkload } from "../types"
 export const DEEPSEEK_PLANNER_MODEL = "deepseek-v4-flash";
 
 export const PLANNER_SECTION_TITLES = [
-  "Recommended Orbit",
-  "Data Center Assignment",
-  "Downlink Plan",
-  "Cost/Water Impact",
-  "Risk Notes",
+  "Workload Fit",
+  "Recommended Satellite Assignment",
+  "Communication/Downlink Plan",
+  "Ground Comparison",
+  "Risk/Assumptions",
+  "Next Action",
 ] as const;
 
 export type PlannerSectionTitle = (typeof PLANNER_SECTION_TITLES)[number];
@@ -56,12 +57,55 @@ export type PlannerComputeSatellite = Pick<
   | "thermalCapacityKw"
   | "sunlightPercent"
   | "massKg"
->;
+> & {
+  health: Pick<
+    ComputeSatellite["health"],
+    | "thermalLoadPercent"
+    | "thermalMarginKw"
+    | "computeLoadPercent"
+    | "computeHeadroomPercent"
+    | "queueLoadPercent"
+    | "radiationRiskPercent"
+    | "linkQualityPercent"
+    | "linkReady"
+  >;
+};
 
 export type PlannerGroundStation = Pick<
   GroundStation,
   "id" | "name" | "city" | "lat" | "lng" | "bandwidthGbps"
 >;
+
+export type PlannerSchedulerConstraints = {
+  urgency: "flash" | "priority" | "standard";
+  dataVolumeTb: number;
+  deadlineMinutes: number;
+  passWindowTolerance: "strict" | "flex" | "hold";
+  splittable: boolean;
+  compressible: boolean;
+  bufferable: boolean;
+  priority: PlannerPriority;
+  leoNodeCount: number;
+};
+
+export type PlannerRouteAssignmentSummary = {
+  recommendedSatelliteId: string;
+  recommendedSatelliteName: string;
+  backupSatelliteId?: string;
+  backupSatelliteName?: string;
+  degradedSatelliteIds: string[];
+  selectedGroundStationId: string;
+  selectedGroundStationCity: string;
+  backupGroundStationId?: string;
+  backupGroundStationCity?: string;
+  routeScore: number;
+  status: "ready" | "backup" | "degraded" | "hold";
+  mode: "direct" | "split" | "buffered" | "compressed" | "migration" | "degraded";
+  actions: string[];
+  estimatedNextHandoffMinutes: number;
+  reasons: string[];
+  riskNotes: string[];
+};
 
 export type PlannerRequest = {
   question: string;
@@ -77,6 +121,8 @@ export type PlannerRequest = {
   comparison: PlannerCostComparison;
   computeSatellites: PlannerComputeSatellite[];
   groundStations: PlannerGroundStation[];
+  scheduler: PlannerSchedulerConstraints;
+  routeAssignment: PlannerRouteAssignmentSummary | null;
 };
 
 export type PlannerResponse = {
@@ -94,16 +140,20 @@ export type ValidationResult<T> =
   | { ok: false; error: string };
 
 const PRIORITY_LABELS: Record<PlannerPriority, string> = {
-  solar: "Solar uptime",
-  latency: "Latency",
-  cost: "Cost",
+  solar: "Power margin",
+  latency: "Earliest downlink",
+  cost: "Lowest cost",
 };
 
-const WORKLOAD_IDS = ["llm", "imagery", "training", "mining"] as const;
+const WORKLOAD_IDS = ["auto", "llm", "imagery", "training", "mining"] as const;
 const PRIORITIES: PlannerPriority[] = ["solar", "latency", "cost"];
 const ALTITUDES: PlannerAltitudeKm[] = [550, 610, 720];
 const SOURCES: PlannerSource[] = ["deepseek", "fallback"];
 const CONFIDENCES: PlannerConfidence[] = ["low", "medium", "high"];
+const URGENCIES: PlannerSchedulerConstraints["urgency"][] = ["flash", "priority", "standard"];
+const PASS_WINDOW_TOLERANCES: PlannerSchedulerConstraints["passWindowTolerance"][] = ["strict", "flex", "hold"];
+const ROUTE_STATUSES: PlannerRouteAssignmentSummary["status"][] = ["ready", "backup", "degraded", "hold"];
+const ROUTE_MODES: PlannerRouteAssignmentSummary["mode"][] = ["direct", "split", "buffered", "compressed", "migration", "degraded"];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -119,6 +169,11 @@ function isNonEmptyString(value: unknown): value is string {
 
 function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((item) => typeof item === "string");
+}
+
+function readStringArray(record: Record<string, unknown>, key: string) {
+  const value = record[key];
+  return isStringArray(value) ? value : undefined;
 }
 
 function isPlannerSectionTitle(value: unknown): value is PlannerSectionTitle {
@@ -256,6 +311,15 @@ function validateComputeSatellites(value: unknown): PlannerComputeSatellite[] | 
     const thermalCapacityKw = readNumber(item, "thermalCapacityKw");
     const sunlightPercent = readNumber(item, "sunlightPercent");
     const massKg = readNumber(item, "massKg");
+    const health = isRecord(item.health) ? item.health : undefined;
+    const thermalLoadPercent = health ? readNumber(health, "thermalLoadPercent") : undefined;
+    const thermalMarginKw = health ? readNumber(health, "thermalMarginKw") : undefined;
+    const computeLoadPercent = health ? readNumber(health, "computeLoadPercent") : undefined;
+    const computeHeadroomPercent = health ? readNumber(health, "computeHeadroomPercent") : undefined;
+    const queueLoadPercent = health ? readNumber(health, "queueLoadPercent") : undefined;
+    const radiationRiskPercent = health ? readNumber(health, "radiationRiskPercent") : undefined;
+    const linkQualityPercent = health ? readNumber(health, "linkQualityPercent") : undefined;
+    const linkReady = health?.linkReady;
 
     if (
       !id ||
@@ -267,7 +331,15 @@ function validateComputeSatellites(value: unknown): PlannerComputeSatellite[] | 
       powerKw === undefined ||
       thermalCapacityKw === undefined ||
       sunlightPercent === undefined ||
-      massKg === undefined
+      massKg === undefined ||
+      thermalLoadPercent === undefined ||
+      thermalMarginKw === undefined ||
+      computeLoadPercent === undefined ||
+      computeHeadroomPercent === undefined ||
+      queueLoadPercent === undefined ||
+      radiationRiskPercent === undefined ||
+      linkQualityPercent === undefined ||
+      typeof linkReady !== "boolean"
     ) {
       return undefined;
     }
@@ -283,6 +355,16 @@ function validateComputeSatellites(value: unknown): PlannerComputeSatellite[] | 
       thermalCapacityKw,
       sunlightPercent,
       massKg,
+      health: {
+        thermalLoadPercent,
+        thermalMarginKw,
+        computeLoadPercent,
+        computeHeadroomPercent,
+        queueLoadPercent,
+        radiationRiskPercent,
+        linkQualityPercent,
+        linkReady,
+      },
     };
   });
 
@@ -316,6 +398,115 @@ function validateGroundStations(value: unknown): PlannerGroundStation[] | undefi
   return stations.every(Boolean) ? (stations as PlannerGroundStation[]) : undefined;
 }
 
+function validateScheduler(value: unknown): PlannerSchedulerConstraints | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const urgency = readString(value, "urgency");
+  const dataVolumeTb = readNumber(value, "dataVolumeTb");
+  const deadlineMinutes = readNumber(value, "deadlineMinutes");
+  const passWindowTolerance = readString(value, "passWindowTolerance");
+  const splittable = value.splittable;
+  const compressible = value.compressible;
+  const bufferable = value.bufferable;
+  const priority = readString(value, "priority");
+  const leoNodeCount = readNumber(value, "leoNodeCount");
+
+  if (
+    !urgency ||
+    !URGENCIES.includes(urgency as PlannerSchedulerConstraints["urgency"]) ||
+    dataVolumeTb === undefined ||
+    deadlineMinutes === undefined ||
+    !passWindowTolerance ||
+    !PASS_WINDOW_TOLERANCES.includes(passWindowTolerance as PlannerSchedulerConstraints["passWindowTolerance"]) ||
+    typeof splittable !== "boolean" ||
+    typeof compressible !== "boolean" ||
+    typeof bufferable !== "boolean" ||
+    !priority ||
+    !PRIORITIES.includes(priority as PlannerPriority) ||
+    leoNodeCount === undefined
+  ) {
+    return undefined;
+  }
+
+  return {
+    urgency: urgency as PlannerSchedulerConstraints["urgency"],
+    dataVolumeTb,
+    deadlineMinutes,
+    passWindowTolerance: passWindowTolerance as PlannerSchedulerConstraints["passWindowTolerance"],
+    splittable,
+    compressible,
+    bufferable,
+    priority: priority as PlannerPriority,
+    leoNodeCount,
+  };
+}
+
+function validateRouteAssignment(value: unknown): PlannerRouteAssignmentSummary | null | undefined {
+  if (value === null) {
+    return null;
+  }
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const recommendedSatelliteId = readString(value, "recommendedSatelliteId");
+  const recommendedSatelliteName = readString(value, "recommendedSatelliteName");
+  const backupSatelliteId = readString(value, "backupSatelliteId");
+  const backupSatelliteName = readString(value, "backupSatelliteName");
+  const degradedSatelliteIds = readStringArray(value, "degradedSatelliteIds");
+  const selectedGroundStationId = readString(value, "selectedGroundStationId");
+  const selectedGroundStationCity = readString(value, "selectedGroundStationCity");
+  const backupGroundStationId = readString(value, "backupGroundStationId");
+  const backupGroundStationCity = readString(value, "backupGroundStationCity");
+  const routeScore = readNumber(value, "routeScore");
+  const status = readString(value, "status");
+  const mode = readString(value, "mode");
+  const actions = readStringArray(value, "actions");
+  const estimatedNextHandoffMinutes = readNumber(value, "estimatedNextHandoffMinutes");
+  const reasons = readStringArray(value, "reasons");
+  const riskNotes = readStringArray(value, "riskNotes");
+
+  if (
+    !recommendedSatelliteId ||
+    !recommendedSatelliteName ||
+    !degradedSatelliteIds ||
+    !selectedGroundStationId ||
+    !selectedGroundStationCity ||
+    routeScore === undefined ||
+    !status ||
+    !ROUTE_STATUSES.includes(status as PlannerRouteAssignmentSummary["status"]) ||
+    !mode ||
+    !ROUTE_MODES.includes(mode as PlannerRouteAssignmentSummary["mode"]) ||
+    !actions ||
+    estimatedNextHandoffMinutes === undefined ||
+    !reasons ||
+    !riskNotes
+  ) {
+    return undefined;
+  }
+
+  return {
+    recommendedSatelliteId,
+    recommendedSatelliteName,
+    backupSatelliteId,
+    backupSatelliteName,
+    degradedSatelliteIds,
+    selectedGroundStationId,
+    selectedGroundStationCity,
+    backupGroundStationId,
+    backupGroundStationCity,
+    routeScore,
+    status: status as PlannerRouteAssignmentSummary["status"],
+    mode: mode as PlannerRouteAssignmentSummary["mode"],
+    actions,
+    estimatedNextHandoffMinutes,
+    reasons,
+    riskNotes,
+  };
+}
+
 export function validatePlannerRequest(value: unknown): ValidationResult<PlannerRequest> {
   if (!isRecord(value)) {
     return { ok: false, error: "Planner request must be an object." };
@@ -328,8 +519,20 @@ export function validatePlannerRequest(value: unknown): ValidationResult<Planner
   const comparison = validateCostComparison(value.comparison);
   const computeSatellites = validateComputeSatellites(value.computeSatellites);
   const groundStations = validateGroundStations(value.groundStations);
+  const scheduler = validateScheduler(value.scheduler);
+  const routeAssignment = validateRouteAssignment(value.routeAssignment);
 
-  if (!question || !country || !workload || !metrics || !comparison || !computeSatellites || !groundStations) {
+  if (
+    !question ||
+    !country ||
+    !workload ||
+    !metrics ||
+    !comparison ||
+    !computeSatellites ||
+    !groundStations ||
+    !scheduler ||
+    routeAssignment === undefined
+  ) {
     return { ok: false, error: "Planner request is missing required mission context." };
   }
 
@@ -367,6 +570,8 @@ export function validatePlannerRequest(value: unknown): ValidationResult<Planner
       comparison,
       computeSatellites,
       groundStations,
+      scheduler,
+      routeAssignment,
     },
   };
 }
@@ -463,44 +668,75 @@ export function parsePlannerResponseJson(content: string): ValidationResult<Plan
 }
 
 export function buildFallbackPlannerResponse(request: PlannerRequest, warnings: string[] = []): PlannerResponse {
-  const priorityLabel = PRIORITY_LABELS[request.constellation.priority];
-  const primaryStations = request.groundStations
-    .filter((station) => ["riyadh", "dubai", "abudhabi"].includes(station.id))
-    .map((station) => station.city)
-    .join(", ");
-  const primaryCompute = request.computeSatellites.slice(0, request.workload.id === "training" ? 3 : 2);
-  const primaryComputeNames = primaryCompute.map((satellite) => satellite.name).join(" and ");
-  const reserve = request.computeSatellites.find((satellite) => satellite.id === "compute-c");
+  const priorityLabel = PRIORITY_LABELS[request.scheduler.priority];
+  const route = request.routeAssignment;
+  const recommended =
+    request.computeSatellites.find((satellite) => satellite.id === route?.recommendedSatelliteId) ??
+    request.computeSatellites[0];
+  const backup =
+    request.computeSatellites.find((satellite) => satellite.id === route?.backupSatelliteId) ??
+    request.computeSatellites.find((satellite) => satellite.id !== recommended?.id);
+  const selectedGround =
+    request.groundStations.find((station) => station.id === route?.selectedGroundStationId) ??
+    request.groundStations.find((station) => station.id === "riyadh") ??
+    request.groundStations[0];
+  const backupGround =
+    request.groundStations.find((station) => station.id === route?.backupGroundStationId) ??
+    request.groundStations.find((station) => station.id !== selectedGround?.id);
+  const workloadQualifier =
+    request.workload.id === "auto"
+      ? "multi-company job queue"
+      : request.workload.id === "llm"
+        ? "secondary experimental LLM inference workload"
+        : request.workload.name.toLowerCase();
+  const routeScore = route ? `${route.routeScore}/100 ${route.status}` : "modeled";
+  const handoff = route ? `${route.estimatedNextHandoffMinutes} min` : `${request.scheduler.deadlineMinutes} min target`;
+  const action = route?.actions[0] ?? "assign";
+  const healthLine = recommended
+    ? `${recommended.health.thermalMarginKw} kW thermal margin, ${recommended.health.queueLoadPercent}% queue, ${recommended.health.linkQualityPercent}% link quality, and ${recommended.health.radiationRiskPercent}% radiation risk`
+    : "available health telemetry";
 
   return {
     source: "fallback",
-    summary: "Deterministic Photonix planner response generated from the current mission model.",
+    summary: `Route ${workloadQualifier} to ${
+      recommended?.name ?? "the top ranked compute node"
+    } via ${selectedGround?.city ?? "the selected ground station"}.`,
     sections: [
       {
-        title: "Recommended Orbit",
-        body: `${request.constellation.altitudeKm} km dawn-dusk shell tuned for ${priorityLabel.toLowerCase()}, ${request.metrics.totalSatellites} compute sats across ${request.constellation.orbitalPlanes} orbital planes.`,
+        title: "Workload Fit",
+        body: `${request.workload.name} needs ${request.workload.requiredPowerKw} kW, ${request.scheduler.dataVolumeTb} TB handling, and a ${request.scheduler.deadlineMinutes} minute deadline. Scheduler priority is ${priorityLabel.toLowerCase()} with ${request.scheduler.splittable ? "splittable" : "atomic"} chunks and ${request.scheduler.compressible ? "compression enabled" : "raw outputs"}.`,
       },
       {
-        title: "Data Center Assignment",
-        body: `${request.workload.name} runs on ${primaryComputeNames || "the primary Photonix compute nodes"} first${
-          reserve ? `, with ${reserve.name} held as regional reserve for burst or degraded operations` : ""
-        }.`,
+        title: "Recommended Satellite Assignment",
+        body: `${recommended?.name ?? "Top ranked node"} is assigned for the ${workloadQualifier}; route score is ${routeScore}. Health context: ${healthLine}.${
+          backup ? ` ${backup.name} remains backup.` : ""
+        }`,
       },
       {
-        title: "Downlink Plan",
-        body: `Primary paths stay ${primaryStations || "Riyadh and Dubai"}, with modeled GCC coverage at ${request.metrics.coverageScore}%.`,
+        title: "Communication/Downlink Plan",
+        body: `${selectedGround?.city ?? "Selected ground station"} is primary downlink${
+          backupGround ? ` with ${backupGround.city} as backup` : ""
+        }. Estimated next handoff is ${handoff}; current route action is ${action}.`,
       },
       {
-        title: "Cost/Water Impact",
-        body: `${formatCurrency(request.metrics.launchCost)} launch envelope, ${formatCurrency(request.comparison.orbitalMonthlyCost)} modeled orbital monthly, and ${formatNumber(request.comparison.terrestrialWaterLitersDay)} L/day avoided versus ground cooling.`,
+        title: "Ground Comparison",
+        body: `${formatCurrency(request.comparison.orbitalMonthlyCost)} modeled orbital monthly versus ${formatCurrency(request.comparison.terrestrialMonthlyCost)} ground monthly, with ${formatNumber(request.comparison.terrestrialWaterLitersDay)} L/day cooling water avoided.`,
       },
       {
-        title: "Risk Notes",
-        body: "This is a modeled demo plan. Exact pass timing, radiation exposure, regulatory approvals, and live capacity pricing need production-grade analysis later.",
+        title: "Risk/Assumptions",
+        body:
+          route?.riskNotes.slice(0, 2).join(" ") ||
+          "This is a modeled demo route. Exact pass timing, radiation exposure, regulatory approvals, and live capacity pricing need production-grade analysis later.",
+      },
+      {
+        title: "Next Action",
+        body: `Execute ${route?.actions.map((item) => item.toUpperCase()).join(" / ") || "ASSIGN"} on ${
+          recommended?.name ?? "the selected compute node"
+        }, monitor queue and link quality, and keep ${backup?.name ?? "the backup node"} ready for handoff.`,
       },
     ],
     assumptions: [
-      "Cached orbital inputs and modeled GCC downlink windows are used for the demo.",
+      "Route assignment is deterministic and based on modeled LEO position, health, scheduler constraints, and ground station geometry.",
       "Orbital cost, water, and uptime figures are scenario estimates, not procurement-grade commitments.",
     ],
     warnings,

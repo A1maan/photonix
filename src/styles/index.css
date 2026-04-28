@@ -982,7 +982,6 @@ select {
 .planner-source-badge,
 .planner-quick-actions button,
 .planner-open-button,
-.mission-plan-summary span,
 .plan-window-header span,
 .plan-window-summary span,
 .plan-window-summary em,
@@ -1309,6 +1308,103 @@ select {
   color: #a7f3d0;
 }
 
+.route-status-badge {
+  margin-left: auto;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  padding: 0.18rem 0.42rem;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 0.55rem;
+  font-weight: 850;
+}
+
+.operational-playbook-card {
+  border-color: rgba(245, 184, 75, 0.22);
+}
+
+.playbook-summary {
+  display: grid;
+  gap: 0.24rem;
+  border-left: 2px solid rgba(245, 184, 75, 0.55);
+  background: rgba(245, 184, 75, 0.08);
+  padding: 0.66rem 0.72rem;
+}
+
+.playbook-summary strong {
+  color: #ffffff;
+  font-size: 0.84rem;
+  line-height: 1.25;
+}
+
+.playbook-summary span {
+  color: rgba(226, 240, 255, 0.58);
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 0.66rem;
+}
+
+.playbook-list {
+  display: grid;
+  gap: 0.46rem;
+  margin-top: 0.7rem;
+}
+
+.playbook-list div {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 0.2rem 0.55rem;
+  align-items: center;
+  border: 1px solid rgba(226, 240, 255, 0.09);
+  background: rgba(2, 6, 11, 0.44);
+  padding: 0.58rem 0.64rem;
+}
+
+.playbook-list span {
+  color: rgba(226, 240, 255, 0.52);
+  font-size: 0.56rem;
+  font-weight: 820;
+  text-transform: uppercase;
+}
+
+.playbook-list strong {
+  overflow: hidden;
+  color: #ffffff;
+  font-size: 0.78rem;
+  font-weight: 780;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.playbook-list small {
+  grid-column: 1 / -1;
+  color: rgba(226, 240, 255, 0.54);
+  font-size: 0.62rem;
+  line-height: 1.35;
+}
+
+.playbook-state {
+  border-radius: 0;
+  padding: 0.2rem 0.4rem;
+  font-size: 0.56rem;
+  font-style: normal;
+  font-weight: 850;
+  text-transform: capitalize;
+}
+
+.playbook-state.is-ready,
+.playbook-state.is-active {
+  background: rgba(52, 211, 153, 0.16);
+  color: #a7f3d0;
+}
+
+.playbook-state.is-warn {
+  background: rgba(245, 184, 75, 0.16);
+  color: #ffd166;
+}
+
+.playbook-state.is-hold {
+  background: rgba(148, 163, 184, 0.14);
+  color: #cbd5e1;
+}
+
 .space-weather-summary {
   display: grid;
   gap: 0.28rem;
@@ -1439,6 +1535,13 @@ select {
   padding: 0.62rem 0.7rem;
 }
 
+.segmented-grid button small {
+  color: rgba(226, 240, 255, 0.52);
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 0.62rem;
+  line-height: 1.25;
+}
+
 .control-block {
   margin-top: 0.75rem;
 }
@@ -1447,6 +1550,18 @@ select {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 0.45rem;
+}
+
+.segmented-grid button {
+  display: grid;
+  align-content: center;
+  gap: 0.2rem;
+}
+
+.segmented-grid button span {
+  color: inherit;
+  font-size: inherit;
+  font-weight: inherit;
 }
 
 .workload-option,
@@ -1497,6 +1612,10 @@ select {
   color: rgba(226, 240, 255, 0.58);
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   font-size: 0.68rem;
+}
+
+.satellite-row-health {
+  color: rgba(167, 243, 208, 0.72) !important;
 }
 
 .mission-plan-card {
@@ -1649,46 +1768,11 @@ select {
   gap: 0.62rem;
 }
 
-.mission-plan-summary {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 1rem;
-  border: 1px solid rgba(34, 211, 238, 0.18);
-  background: rgba(8, 21, 34, 0.82);
-  padding: 0.82rem;
-}
-
-.mission-plan-summary div {
-  display: grid;
-  gap: 0.26rem;
-}
-
-.mission-plan-summary span,
 .planner-query-line span,
 .planner-notes-grid span {
   color: rgba(226, 240, 255, 0.52);
   font-size: 0.56rem;
   font-weight: 820;
-}
-
-.mission-plan-summary strong {
-  color: #ffffff;
-  font-size: 0.92rem;
-  line-height: 1.35;
-}
-
-.mission-plan-summary em {
-  flex: none;
-  border: 1px solid rgba(52, 211, 153, 0.26);
-  background: rgba(52, 211, 153, 0.1);
-  color: #a7f3d0;
-  padding: 0.24rem 0.45rem;
-  font-size: 0.62rem;
-  font-style: normal;
-  font-weight: 820;
-  text-transform: capitalize;
-  white-space: nowrap;
 }
 
 .planner-open-button {
@@ -1849,10 +1933,28 @@ select {
   color: #03100d;
   font-size: 0.84rem;
   font-weight: 800;
+  transition:
+    background-color 150ms ease,
+    border-color 150ms ease,
+    box-shadow 150ms ease,
+    transform 150ms ease;
 }
 
 .mission-send:hover {
   background: #a7f3d0;
+}
+
+.mission-send.is-generated {
+  border-color: rgba(54, 242, 192, 0.86);
+  background: #36f2c0;
+  box-shadow:
+    0 0 0 1px rgba(54, 242, 192, 0.2),
+    0 0 24px rgba(54, 242, 192, 0.22);
+}
+
+.mission-send.is-generated:hover {
+  background: #a7f3d0;
+  transform: translateY(-1px);
 }
 
 .satellite-list {
@@ -1881,6 +1983,7 @@ select {
   font-size: 0.64rem;
   font-style: normal;
   font-weight: 800;
+  white-space: nowrap;
 }
 
 .status-ok {
@@ -2142,19 +2245,6 @@ select {
   font-weight: 850;
 }
 
-.assumption-list {
-  display: grid;
-  gap: 0.48rem;
-}
-
-.assumption-list span {
-  border-left: 2px solid rgba(34, 211, 238, 0.45);
-  color: rgba(226, 240, 255, 0.72);
-  font-size: 0.75rem;
-  line-height: 1.35;
-  padding-left: 0.62rem;
-}
-
 .plan-window-backdrop {
   position: fixed;
   inset: 0;
@@ -2361,7 +2451,6 @@ select {
     grid-template-columns: 1fr;
   }
 
-  .mission-plan-summary,
   .plan-window-summary,
   .plan-window-header {
     display: grid;

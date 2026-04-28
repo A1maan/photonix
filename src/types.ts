@@ -98,7 +98,7 @@ export type AdvisorRecommendation = {
   tradeoff: string;
 };
 
-export type OrbitalWorkloadId = "llm" | "imagery" | "training" | "mining";
+export type OrbitalWorkloadId = "auto" | "llm" | "imagery" | "training" | "mining";
 
 export type OrbitalWorkload = {
   id: OrbitalWorkloadId;
@@ -118,6 +118,19 @@ export type GroundStation = {
   bandwidthGbps: number;
 };
 
+export type ComputeSatelliteHealth = {
+  thermalLoadPercent: number;
+  thermalMarginKw: number;
+  batteryPercent: number;
+  powerStatePercent: number;
+  computeLoadPercent: number;
+  computeHeadroomPercent: number;
+  queueLoadPercent: number;
+  radiationRiskPercent: number;
+  linkQualityPercent: number;
+  linkReady: boolean;
+};
+
 export type ComputeSatellite = {
   id: string;
   name: string;
@@ -131,6 +144,7 @@ export type ComputeSatellite = {
   thermalCapacityKw: number;
   sunlightPercent: number;
   massKg: number;
+  health: ComputeSatelliteHealth;
 };
 
 export type TrackedTle = {

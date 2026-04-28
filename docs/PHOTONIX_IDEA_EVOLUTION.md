@@ -2,17 +2,17 @@
 
 Living note for the current Photonix product thesis. This file should evolve as the demo, pitch, technical assumptions, and aerospace feedback become clearer.
 
-Last updated: April 28, 2026
+Last updated: April 29, 2026
 
 ## Current State
 
-Photonix is a mission-control prototype for routing and optimizing AI workloads across orbital AI data centers, focused on Saudi Arabia and the GCC.
+Photonix is a mission-control prototype for routing and optimizing many incoming AI jobs across orbital AI data centers, focused on Saudi Arabia and the GCC.
 
-The original project framing emphasized LLM inference for GCC users. That is useful as a judge-friendly demo scenario, but it is not the strongest first real-world use case. The current corrected framing is:
+The original project framing emphasized one LLM inference mission for GCC users. That is useful as a judge-friendly demo scenario, but the stronger product framing is a queue of jobs from many companies, each with its own constraints. The current corrected framing is:
 
-> Photonix assumes a LEO orbital compute network already exists, then decides which satellite should receive each workload based on power, thermal margin, compute capacity, radiation or space-weather risk, link quality, queue load, and ground-station access.
+> Photonix assumes a LEO orbital compute network already exists, then decides how to split and assign many incoming jobs across available satellites based on each job's hardware needs, deadline, data volume, splittability, power, thermal margin, compute capacity, radiation or space-weather risk, link quality, queue load, and ground-station access.
 
-This makes the product an orbital workload scheduler and mission operations copilot, not primarily a tool for designing and launching a constellation from scratch.
+This makes the product an orbital workload router and mission operations copilot, not primarily a tool for designing and launching a constellation from scratch.
 
 ## Main Thesis
 
@@ -32,20 +32,23 @@ Photonix should operate under this assumption:
 
 ```text
 The orbital AI data center satellites are already in orbit.
-Photonix is deciding where to send each workload right now.
+Photonix is deciding how to split and place the current job queue right now.
 ```
 
 This keeps the demo focused on an operational problem:
 
 ```text
-Incoming workload
+Incoming company job queue
   -> inspect available orbital compute satellites
-  -> compare thermal margin, power, compute capacity, link quality, queue load, and space-weather risk
-  -> assign the workload to the best satellite
-  -> reroute, delay, split, or migrate the workload if conditions change
+  -> read each job's constraints, such as deadline, data volume, GPU requirement, and downlink need
+  -> compare thermal margin, power, compute capacity, GPU type, link quality, queue load, and space-weather risk
+  -> split or assign jobs across the best eligible satellites
+  -> reroute, delay, split further, or migrate jobs if conditions change
 ```
 
-In this framing, constellation design becomes an advanced or future feature. The core demo is about operational scheduling and failover across an existing LEO compute network.
+In this framing, constellation design becomes an advanced or future feature. The core demo is about operational scheduling, queue splitting, and failover across an existing LEO compute network.
+
+Because multiple jobs can compete for the same orbital resources, Photonix needs a local search or optimization layer that can evaluate many possible job-to-satellite assignments before the AI planner explains the chosen plan. The exact algorithm is a later engineering decision; the product requirement is that Photonix must search locally over constraints instead of relying only on a single LLM response.
 
 ## Corrected Use Case Priority
 
@@ -110,11 +113,12 @@ Ground station
 Operationally, the planner should see this as a changing network of available compute options:
 
 ```text
-Workload arrives
+Job queue arrives
   -> Dawn-1 is cool, powered, and has a Riyadh link soon
-  -> Dawn-2 has higher thermal load or radiation exposure
+  -> Dawn-2 has a B200 and can satisfy a customer that requires that hardware
   -> Gulf Nano can handle only compressed metadata or degraded-mode inference
-  -> assign full workload to Dawn-1 and keep Dawn-2/Gulf Nano as backup paths
+  -> split jobs across Dawn-1, Dawn-2, and Gulf Nano according to constraints
+  -> keep backup paths ready if link, power, or radiation conditions change
 ```
 
 Key correction:
@@ -157,7 +161,7 @@ Photonix should eventually score:
 
 ## What The AI Planner Should Do
 
-The AI should not only generate generic text for the current configuration. It should behave like an orbital workload scheduler and mission planning copilot.
+The AI should not only generate generic text for the current configuration. It should behave like an orbital job router and mission planning copilot.
 
 The deterministic simulator should produce metrics. The AI should interpret the metrics, explain tradeoffs, and warn against weak assumptions.
 
@@ -178,12 +182,14 @@ Large Model Training: Long-term fit
 Reason: high power demand may benefit from orbital solar, but launch mass, thermal design, repairability, and cost are unresolved.
 ```
 
-### 2. Workload Assignment
+### 2. Multi-Job Assignment
 
-The planner should choose the best available satellite for a workload already waiting to be processed.
+The planner should choose the best available satellite or satellite group for each job already waiting to be processed.
 
 It should consider:
 
+- Company or customer constraints.
+- Required GPU or accelerator type, such as B200-class hardware.
 - Thermal margin.
 - Available solar power and battery state.
 - Compute capacity and GPU type.
@@ -191,17 +197,19 @@ It should consider:
 - Radiation or space-weather exposure.
 - Ground-station visibility.
 - Link quality and bandwidth.
-- Whether the task is urgent, delay-tolerant, splittable, or compressible.
+- Whether each task is urgent, delay-tolerant, splittable, or compressible.
 
 Example:
 
 ```text
 Recommendation:
 Send disaster-response imagery triage to Dawn-1 now.
+Send the B200-required customer inference job to Dawn-2 if its radiation and thermal margins remain acceptable.
+Send metadata extraction and compressed previews to Gulf Nano only.
 
 Reason:
 Dawn-1 has the best thermal margin, enough compute headroom, and a Riyadh downlink window soon.
-Dawn-2 is still available, but its radiation risk is elevated.
+Dawn-2 has the required hardware for the B200-constrained job, but its radiation risk must be watched.
 Gulf Nano should only receive compressed metadata extraction because it lacks enough power for full inference.
 ```
 
@@ -239,7 +247,7 @@ It should answer:
 - What happens if Riyadh loses the link?
 - What happens if Dawn-2 is degraded?
 - Which station receives the result if the primary station is unavailable?
-- Which workloads should pause, migrate, or buffer?
+- Which jobs should pause, migrate, split, or buffer?
 - Which path is best for urgent data?
 
 ### 5. Simulation Response
@@ -294,11 +302,11 @@ After a plan is generated, the AI should output a concise brief:
 
 Short version:
 
-> Photonix is mission-control software for routing AI workloads across LEO orbital data centers. It assumes the orbital compute network already exists, then decides which satellite should process each workload based on power, temperature, compute capacity, link quality, space-weather risk, and ground-station access.
+> Photonix is mission-control software for routing many AI jobs across LEO orbital data centers. It assumes the orbital compute network already exists, then decides how to split and assign each job based on hardware requirements, deadlines, power, temperature, compute capacity, link quality, space-weather risk, and ground-station access.
 
 Longer version:
 
-> As AI infrastructure runs into power, cooling, land, water, and grid constraints, companies are exploring compute in orbit. But once orbital compute satellites exist, operators still need to decide where each workload should run minute by minute. Photonix turns that into a mission-control workspace: choose an incoming workload, inspect the live state of each LEO compute satellite, assign the job to the best node, route results through GCC ground stations and optical inter-satellite links, and simulate failures such as heat, radiation, link loss, or overloaded queues.
+> As AI infrastructure runs into power, cooling, land, water, and grid constraints, companies are exploring compute in orbit. But once orbital compute satellites exist, operators still need to decide where many competing jobs should run minute by minute. Photonix turns that into a mission-control workspace: ingest a queue of company jobs, inspect the live state of each LEO compute satellite, split work across eligible nodes, route results through GCC ground stations and optical inter-satellite links, and simulate failures such as heat, radiation, link loss, or overloaded queues.
 
 ## Product Implications
 
@@ -307,19 +315,24 @@ The app should gradually move from a "pretty globe plus generated text" toward a
 Recommended UI/product additions:
 
 - Rename or reprioritize the default scenario from "GCC LLM Inference" to "GCC Satellite Imagery Analysis" or "Disaster Response Imagery Triage."
+- Add an Auto workload mode for a mixed queue of jobs from many companies.
+- Add job constraints such as required accelerator, deadline, data volume, splittability, compression preference, and downlink target.
+- Add a local search or optimization layer that proposes a feasible split of jobs across satellites before the AI planner explains the result.
 - Add a workload-fit score.
 - Add satellite health cards with temperature, thermal margin, power state, compute headroom, queue load, and radiation/weather risk.
-- Add a workload assignment recommendation that selects the best satellite now and explains why.
+- Add a job assignment recommendation that selects the best eligible satellite or satellite group now and explains why.
 - Add a communication-resilience score.
 - Add explicit routing paths, not just downlink arcs.
 - Add primary, backup, and degraded communication modes.
-- Add actions such as assign now, delay, split workload, compress result, migrate workload, or downlink raw data.
+- Add actions such as assign now, delay, split jobs, compress results, migrate jobs, or downlink raw data.
 - Add AI-generated simulation responses for storm, link-loss, and node-failure events.
 - Keep LLM inference as a secondary scenario or advanced workload.
 
 ## Open Questions
 
 - Should the demo default to imagery analysis instead of LLM inference?
+- Should the demo default to Auto multi-job queue instead of a single imagery or LLM workload?
+- What is the minimum job constraint schema needed for the first local assignment search?
 - Should the pitch mention Google/Starcloud/NVIDIA directly or keep sources in backup notes?
 - Should Photonix show a LEO optical mesh as visible links between compute satellites?
 - Should the system include a "bad fit" warning when the user selects a workload that is better served on Earth?
@@ -334,6 +347,6 @@ The project DOCX should eventually be updated so:
 - Primary use case becomes satellite imagery analysis / in-space data processing.
 - LLM inference becomes secondary or demo-only.
 - Architecture mentions LEO optical mesh and redundant ground stations.
-- Planner assumes satellites are already in orbit and recommends where to send the next workload.
+- Planner assumes satellites are already in orbit and recommends how to split and assign the current job queue.
 - Known limitations mention line-of-sight, link budget, weather, optical link availability, thermal design, and production pass-window computation.
 - Pitch script avoids implying that Photonix proves orbital compute beats terrestrial compute for all workloads.

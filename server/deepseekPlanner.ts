@@ -23,6 +23,7 @@ const SYSTEM_PROMPT = `You are Photonix Mission Planner for an orbital AI data c
 
 Return only valid json. Do not use markdown or prose outside the json object.
 Use only the supplied mission context and modeled values.
+If the workload is an auto multi-job queue, reason about splitting jobs across eligible LEO compute nodes based on each job's hardware, deadline, data volume, queue, and downlink constraints.
 Do not claim exact orbital pass timing, regulatory certainty, real procurement pricing, or live CelesTrak analysis.
 
 Required json shape:
@@ -31,11 +32,12 @@ Required json shape:
   "model": "deepseek-v4-flash",
   "summary": "one short sentence",
   "sections": [
-    { "title": "Recommended Orbit", "body": "..." },
-    { "title": "Data Center Assignment", "body": "..." },
-    { "title": "Downlink Plan", "body": "..." },
-    { "title": "Cost/Water Impact", "body": "..." },
-    { "title": "Risk Notes", "body": "..." }
+    { "title": "Workload Fit", "body": "..." },
+    { "title": "Recommended Satellite Assignment", "body": "..." },
+    { "title": "Communication/Downlink Plan", "body": "..." },
+    { "title": "Ground Comparison", "body": "..." },
+    { "title": "Risk/Assumptions", "body": "..." },
+    { "title": "Next Action", "body": "..." }
   ],
   "assumptions": ["..."],
   "warnings": ["..."],
@@ -53,19 +55,18 @@ function compactMissionContext(request: PlannerRequest) {
     question: request.question,
     country: request.country,
     workload: request.workload,
-    constellation: request.constellation,
-    metrics: request.metrics,
+    scheduler: request.scheduler,
+    routeAssignment: request.routeAssignment,
     comparison: request.comparison,
     computeSatellites: request.computeSatellites.map((satellite) => ({
+      id: satellite.id,
       name: satellite.name,
       orbitName: satellite.orbitName,
-      altitudeKm: satellite.altitudeKm,
-      inclinationDeg: satellite.inclinationDeg,
       gpuType: satellite.gpuType,
       powerKw: satellite.powerKw,
       thermalCapacityKw: satellite.thermalCapacityKw,
       sunlightPercent: satellite.sunlightPercent,
-      massKg: satellite.massKg,
+      health: satellite.health,
     })),
     groundStations: request.groundStations.map((station) => ({
       city: station.city,
