@@ -677,6 +677,102 @@ select {
   background: rgba(2, 6, 11, 0.18);
 }
 
+.simulation-visual-layer {
+  z-index: 18;
+  overflow: hidden;
+}
+
+.time-sweep {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -12%;
+  width: 10rem;
+  border-left: 2px solid rgba(34, 211, 238, 0.72);
+  border-right: 1px solid rgba(34, 211, 238, 0.42);
+  background: rgba(34, 211, 238, 0.08);
+  transform: skewX(-13deg);
+  animation: time-sweep-pass 3.8s linear infinite;
+}
+
+.time-sweep span,
+.storm-front span {
+  position: absolute;
+  top: 7.2rem;
+  left: 1rem;
+  color: #dffcff;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 0.62rem;
+  font-weight: 850;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  transform: skewX(13deg);
+  white-space: nowrap;
+}
+
+.storm-front {
+  position: absolute;
+  top: -8%;
+  bottom: -8%;
+  left: 8%;
+  width: 18rem;
+  border-left: 2px solid rgba(239, 68, 68, 0.82);
+  border-right: 1px solid rgba(245, 184, 75, 0.68);
+  background: rgba(239, 68, 68, 0.12);
+  transform: rotate(-18deg);
+  animation: storm-front-pulse 1.15s steps(2, end) infinite;
+}
+
+.storm-front span {
+  top: 5.4rem;
+  color: #ffe7e7;
+  transform: rotate(18deg);
+}
+
+.storm-front i {
+  position: absolute;
+  display: block;
+  width: 2px;
+  height: 34%;
+  background: rgba(245, 184, 75, 0.72);
+}
+
+.storm-front i:nth-of-type(1) {
+  top: 12%;
+  left: 28%;
+}
+
+.storm-front i:nth-of-type(2) {
+  top: 37%;
+  left: 56%;
+}
+
+.storm-front i:nth-of-type(3) {
+  top: 5%;
+  left: 78%;
+}
+
+@keyframes time-sweep-pass {
+  from {
+    transform: translateX(0) skewX(-13deg);
+  }
+
+  to {
+    transform: translateX(122vw) skewX(-13deg);
+  }
+}
+
+@keyframes storm-front-pulse {
+  0%,
+  100% {
+    opacity: 0.72;
+  }
+
+  50% {
+    opacity: 1;
+  }
+}
+
 .mission-panel {
   position: fixed;
   top: 0;
@@ -827,8 +923,13 @@ select {
 .mission-card-title,
 .metric-cell span,
 .spec-grid span,
+.builder-grid span,
+.control-block > span,
+.planner-result-card span,
 .impact-strip span,
-.timeline-row small {
+.timeline-row small,
+.ops-status-list span,
+.range-markers span {
   letter-spacing: 0.12em;
   text-transform: uppercase;
 }
@@ -1034,10 +1135,89 @@ select {
   color: #22d3ee;
 }
 
+.mission-mode-switch {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.45rem;
+}
+
+.mission-mode-switch button,
+.segmented-grid button {
+  min-height: 2.45rem;
+  border: 1px solid rgba(226, 240, 255, 0.11);
+  border-radius: 0;
+  background: rgba(2, 6, 11, 0.68);
+  color: rgba(226, 240, 255, 0.72);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  transition:
+    background-color 150ms ease,
+    border-color 150ms ease,
+    color 150ms ease;
+}
+
+.mission-mode-switch button:hover,
+.segmented-grid button:hover {
+  border-color: rgba(34, 211, 238, 0.36);
+  background: rgba(9, 28, 44, 0.72);
+  color: #ffffff;
+}
+
+.mission-mode-switch button.is-selected,
+.segmented-grid button.is-selected {
+  border-color: rgba(52, 211, 153, 0.56);
+  background: rgba(52, 211, 153, 0.14);
+  color: #ffffff;
+}
+
 .workload-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.5rem;
+}
+
+.builder-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.55rem;
+}
+
+.builder-grid label,
+.control-block {
+  display: grid;
+  gap: 0.42rem;
+}
+
+.builder-grid span,
+.control-block > span {
+  color: rgba(226, 240, 255, 0.54);
+  font-size: 0.58rem;
+  font-weight: 760;
+}
+
+.builder-grid input {
+  width: 100%;
+  border: 1px solid rgba(226, 240, 255, 0.12);
+  border-radius: 0;
+  background: rgba(2, 6, 11, 0.72);
+  color: #ffffff;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 1rem;
+  font-weight: 800;
+  outline: none;
+  padding: 0.62rem 0.7rem;
+}
+
+.control-block {
+  margin-top: 0.75rem;
+}
+
+.segmented-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.45rem;
 }
 
 .workload-option,
@@ -1130,6 +1310,31 @@ select {
   color: #a7f3d0;
 }
 
+.planner-result-grid {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.planner-result-card {
+  border-left: 2px solid rgba(34, 211, 238, 0.48);
+  background: rgba(2, 6, 11, 0.42);
+  padding: 0.62rem 0.7rem;
+}
+
+.planner-result-card span {
+  display: block;
+  color: rgba(226, 240, 255, 0.58);
+  font-size: 0.57rem;
+  font-weight: 800;
+}
+
+.planner-result-card p {
+  margin: 0.28rem 0 0;
+  color: #dceaff;
+  font-size: 0.77rem;
+  line-height: 1.42;
+}
+
 .chat-form {
   display: grid;
   gap: 0.55rem;
@@ -1214,6 +1419,11 @@ select {
   color: #cbd5e1;
 }
 
+.status-danger {
+  background: rgba(239, 68, 68, 0.16);
+  color: #fecaca;
+}
+
 .spec-grid,
 .comparison-grid {
   display: grid;
@@ -1290,6 +1500,10 @@ select {
   border-left-color: #34d399;
 }
 
+.timeline-row.is-warning {
+  border-left-color: #ef4444;
+}
+
 .timeline-row span {
   color: #f8fbff;
   font-size: 0.82rem;
@@ -1307,6 +1521,146 @@ select {
   color: rgba(226, 240, 255, 0.48);
   font-size: 0.57rem;
   font-weight: 760;
+}
+
+.simulation-readout {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  border: 1px solid rgba(226, 240, 255, 0.1);
+  background: rgba(2, 6, 11, 0.46);
+  padding: 0.7rem;
+}
+
+.simulation-readout strong {
+  color: #ffffff;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 1.3rem;
+}
+
+.simulation-readout span {
+  color: rgba(226, 240, 255, 0.64);
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 0.82rem;
+}
+
+.simulation-range {
+  width: 100%;
+  margin-top: 0.9rem;
+  accent-color: #34d399;
+}
+
+.range-markers {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 0.35rem;
+}
+
+.range-markers span {
+  color: rgba(226, 240, 255, 0.5);
+  font-size: 0.56rem;
+  font-weight: 760;
+}
+
+.simulation-stepper {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.45rem;
+  margin-top: 0.7rem;
+}
+
+.simulation-stepper button {
+  min-height: 2.25rem;
+  border: 1px solid rgba(226, 240, 255, 0.11);
+  border-radius: 0;
+  background: rgba(2, 6, 11, 0.68);
+  color: rgba(226, 240, 255, 0.78);
+  font-size: 0.7rem;
+  font-weight: 850;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.simulation-stepper button:hover {
+  border-color: rgba(34, 211, 238, 0.36);
+  background: rgba(9, 28, 44, 0.72);
+  color: #ffffff;
+}
+
+.simulation-play-button {
+  display: inline-flex;
+  width: 100%;
+  min-height: 2.45rem;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  margin-top: 0.55rem;
+  border: 1px solid rgba(34, 211, 238, 0.4);
+  border-radius: 0;
+  background: rgba(34, 211, 238, 0.14);
+  color: #dffcff;
+  font-size: 0.74rem;
+  font-weight: 850;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.simulation-play-button.is-active {
+  border-color: rgba(52, 211, 153, 0.56);
+  background: #34d399;
+  color: #03100d;
+}
+
+.mission-storm-button {
+  display: inline-flex;
+  width: 100%;
+  min-height: 2.7rem;
+  align-items: center;
+  justify-content: center;
+  gap: 0.52rem;
+  margin-top: 0.9rem;
+  border: 1px solid rgba(245, 184, 75, 0.42);
+  border-radius: 0;
+  background: #f5b84b;
+  color: #1f1302;
+  font-size: 0.78rem;
+  font-weight: 850;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.mission-storm-button.is-active {
+  border-color: rgba(239, 68, 68, 0.56);
+  background: #ef4444;
+  color: #ffffff;
+}
+
+.ops-status-list {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.ops-status-list div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.7rem;
+  border: 1px solid rgba(226, 240, 255, 0.09);
+  background: rgba(2, 6, 11, 0.44);
+  padding: 0.62rem 0.68rem;
+}
+
+.ops-status-list span {
+  color: rgba(226, 240, 255, 0.55);
+  font-size: 0.58rem;
+  font-weight: 760;
+}
+
+.ops-status-list strong {
+  border-radius: 0;
+  padding: 0.25rem 0.5rem;
+  font-size: 0.64rem;
+  font-weight: 850;
 }
 
 .assumption-list {
@@ -1357,7 +1711,9 @@ select {
 
   .workload-grid,
   .comparison-grid,
-  .spec-grid {
+  .spec-grid,
+  .builder-grid,
+  .segmented-grid {
     grid-template-columns: 1fr;
   }
 }

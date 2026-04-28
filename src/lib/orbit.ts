@@ -43,6 +43,7 @@ export type CostComparison = {
 
 const EARTH_RADIUS_KM = 6371;
 const MINUTES_PER_DAY = 1440;
+const COMPUTE_ORBIT_EPOCH_MS = Date.UTC(2026, 3, 28, 0, 0, 0);
 const PUE = 1.54;
 const WATER_L_PER_KWH = 1.8;
 const LAUNCH_COST_PER_KG = 6000;
@@ -95,7 +96,7 @@ export function propagateTrackedSatellites(
 }
 
 export function projectComputeSatellite(sat: ComputeSatellite, date: Date): OrbitPoint {
-  const elapsedMinutes = date.getTime() / 60000;
+  const elapsedMinutes = (date.getTime() - COMPUTE_ORBIT_EPOCH_MS) / 60000;
   const orbitPeriodMinutes = 94 + (sat.altitudeKm - 550) / 18;
   const phase = degToRad((sat.phaseDeg + (elapsedMinutes / orbitPeriodMinutes) * 360) % 360);
   const inclination = degToRad(sat.inclinationDeg);
@@ -135,6 +136,7 @@ export function buildDownlinkArcs(
   computePoints: OrbitPoint[],
   stations: GroundStation[],
   active: boolean,
+  stormActive = false,
 ): DownlinkArc[] {
   if (!active) {
     return [];
@@ -142,19 +144,26 @@ export function buildDownlinkArcs(
 
   const targetStations = stations.filter((station) => ["riyadh", "dubai", "abudhabi"].includes(station.id));
   return computePoints.slice(0, 2).flatMap((point, index) =>
-    targetStations.slice(0, index === 0 ? 3 : 2).map((station) => ({
-      id: `${point.id}-${station.id}`,
-      satelliteId: point.id,
-      groundStationId: station.id,
-      startLat: point.lat,
-      startLng: point.lng,
-      startAlt: point.altitude,
-      endLat: station.lat,
-      endLng: station.lng,
-      endAlt: 0.012,
-      color: ["rgba(245, 184, 75, 0.92)", "rgba(52, 211, 153, 0.92)"],
-      label: `${point.name} to ${station.city}: ${station.bandwidthGbps.toFixed(1)} Gbps`,
-    })),
+    targetStations.slice(0, index === 0 ? 3 : 2).map((station) => {
+      const degraded = stormActive && point.id === "compute-b";
+      return {
+        id: `${point.id}-${station.id}`,
+        satelliteId: point.id,
+        groundStationId: station.id,
+        startLat: point.lat,
+        startLng: point.lng,
+        startAlt: point.altitude,
+        endLat: station.lat,
+        endLng: station.lng,
+        endAlt: 0.012,
+        color: degraded
+          ? ["rgba(239, 68, 68, 0.92)", "rgba(245, 184, 75, 0.84)"]
+          : ["rgba(245, 184, 75, 0.92)", "rgba(52, 211, 153, 0.92)"],
+        label: `${point.name} to ${station.city}: ${
+          degraded ? "degraded storm path" : `${station.bandwidthGbps.toFixed(1)} Gbps`
+        }`,
+      };
+    }),
   );
 }
 
