@@ -83,6 +83,7 @@ type PlanMetrics = {
 };
 
 const SAUDI_VIEW = { lat: 24.4, lng: 49.2, altitude: 1.34 };
+const SAUDI_OPERATIONS_TARGET = { lat: 24.7136, lng: 46.6753 };
 const GLOBE_IMAGE_URL = "/assets/earth-day.jpg";
 const BACKGROUND_IMAGE_URL = "/assets/night-sky.png";
 const DEMO_ORBIT_START = Date.UTC(2026, 3, 28, 0, 0, 0);
@@ -162,6 +163,18 @@ function formatSeverity(scenario: SpaceWeatherScenario) {
 function formatCoordinate(value: number, axis: "lat" | "lng") {
   const direction = axis === "lat" ? (value >= 0 ? "N" : "S") : value >= 0 ? "E" : "W";
   return `${Math.abs(value).toFixed(1)} deg ${direction}`;
+}
+
+function surfaceDistanceKm(a: { lat: number; lng: number }, b: { lat: number; lng: number }) {
+  const earthRadiusKm = 6371;
+  const lat1 = (a.lat * Math.PI) / 180;
+  const lat2 = (b.lat * Math.PI) / 180;
+  const deltaLat = ((b.lat - a.lat) * Math.PI) / 180;
+  const deltaLng = ((b.lng - a.lng) * Math.PI) / 180;
+  const h =
+    Math.sin(deltaLat / 2) ** 2 +
+    Math.cos(lat1) * Math.cos(lat2) * Math.sin(deltaLng / 2) ** 2;
+  return 2 * earthRadiusKm * Math.asin(Math.min(1, Math.sqrt(h)));
 }
 
 function globeVector(globe: GlobeMethods, lat: number, lng: number, altitude: number) {
@@ -326,22 +339,23 @@ function makeTextSprite(text: string, color: string) {
   return sprite;
 }
 
-function createOrbitalDataCenterModel(point: OrbitPoint, stormActive: boolean, selected: boolean) {
-  const atRisk = stormActive && point.id === "compute-b";
-  const takingOver = stormActive && point.id === "compute-a";
-  const accent = atRisk ? "#ef4444" : takingOver ? "#34d399" : selected ? "#ffffff" : "#ffd166";
+function createOrbitalDataCenterModel(point: OrbitPoint, stormActive: boolean, selected: boolean, active: boolean) {
+  const inactive = !active;
+  const atRisk = active && stormActive && point.id === "compute-b";
+  const takingOver = active && stormActive && point.id === "compute-a";
+  const accent = inactive ? "#64748b" : atRisk ? "#ef4444" : takingOver ? "#34d399" : selected ? "#ffffff" : "#34d399";
   const group = new THREE.Group();
   group.name = point.name;
-  group.scale.setScalar(selected ? 1.18 : 1);
+  group.scale.setScalar(selected ? 1.18 : inactive ? 0.92 : 1);
 
   const bus = new THREE.Mesh(
     new THREE.BoxGeometry(3.35, 1.85, 1.85),
     new THREE.MeshStandardMaterial({
-      color: atRisk ? "#3a1010" : "#141b24",
-      emissive: atRisk ? "#7f1d1d" : takingOver ? "#064e3b" : "#3b2a09",
-      emissiveIntensity: atRisk ? 0.9 : 0.42,
-      metalness: 0.68,
-      roughness: 0.32,
+      color: inactive ? "#070b12" : atRisk ? "#3a1010" : "#141b24",
+      emissive: inactive ? "#020617" : atRisk ? "#7f1d1d" : takingOver ? "#064e3b" : "#064e3b",
+      emissiveIntensity: inactive ? 0.1 : atRisk ? 0.9 : 0.42,
+      metalness: inactive ? 0.42 : 0.68,
+      roughness: inactive ? 0.62 : 0.32,
     }),
   );
   group.add(bus);
@@ -351,7 +365,7 @@ function createOrbitalDataCenterModel(point: OrbitPoint, stormActive: boolean, s
     new THREE.MeshStandardMaterial({
       color: "#050b12",
       emissive: accent,
-      emissiveIntensity: atRisk ? 0.42 : 0.28,
+      emissiveIntensity: inactive ? 0.08 : atRisk ? 0.42 : 0.28,
       metalness: 0.5,
       roughness: 0.38,
     }),
@@ -359,12 +373,14 @@ function createOrbitalDataCenterModel(point: OrbitPoint, stormActive: boolean, s
   group.add(core);
 
   const panelMaterial = new THREE.MeshStandardMaterial({
-    color: atRisk ? "#5f1717" : "#0f3d4a",
-    emissive: atRisk ? "#ef4444" : "#22d3ee",
-    emissiveIntensity: atRisk ? 0.44 : 0.24,
+    color: inactive ? "#101722" : atRisk ? "#5f1717" : "#0f3d4a",
+    emissive: inactive ? "#020617" : atRisk ? "#ef4444" : "#22d3ee",
+    emissiveIntensity: inactive ? 0.05 : atRisk ? 0.44 : 0.24,
     metalness: 0.25,
     roughness: 0.46,
     side: THREE.DoubleSide,
+    transparent: inactive,
+    opacity: inactive ? 0.5 : 1,
   });
   const leftPanel = new THREE.Mesh(new THREE.BoxGeometry(4.6, 0.13, 2.05), panelMaterial);
   leftPanel.position.x = -4.15;
@@ -382,12 +398,12 @@ function createOrbitalDataCenterModel(point: OrbitPoint, stormActive: boolean, s
 
   const statusRing = new THREE.Mesh(
     new THREE.TorusGeometry(2.7, 0.08, 8, 48),
-    new THREE.MeshBasicMaterial({ color: accent, transparent: true, opacity: atRisk ? 0.78 : 0.55 }),
+    new THREE.MeshBasicMaterial({ color: accent, transparent: true, opacity: inactive ? 0.24 : atRisk ? 0.78 : 0.55 }),
   );
   statusRing.rotation.x = Math.PI / 2;
   group.add(statusRing);
 
-  group.add(makeTextSprite(atRisk ? "AI DC RISK" : "AI DC", accent));
+  group.add(makeTextSprite(inactive ? "AI DC OFF" : atRisk ? "AI DC RISK" : "AI DC ACTIVE", accent));
   return group;
 }
 
@@ -534,6 +550,15 @@ export function MissionControl({ country, logoTransitioning = false, onBackToGlo
     () => computeSatellites.map((satellite) => projectComputeSatellite(satellite, computePropagationDate)),
     [computePropagationDate],
   );
+  const computePointsBySaudiDistance = useMemo(
+    () =>
+      [...computePoints].sort(
+        (a, b) => surfaceDistanceKm(a, SAUDI_OPERATIONS_TARGET) - surfaceDistanceKm(b, SAUDI_OPERATIONS_TARGET),
+      ),
+    [computePoints],
+  );
+  const nearestSaudiComputeId = computePointsBySaudiDistance[0]?.id ?? "compute-a";
+  const farthestSaudiComputeId = computePointsBySaudiDistance[computePointsBySaudiDistance.length - 1]?.id ?? "compute-b";
   const schedulerSnapshot = useMemo(
     () => ({
       urgency: schedulerUrgency,
@@ -647,17 +672,21 @@ export function MissionControl({ country, logoTransitioning = false, onBackToGlo
     () => rankComputeSatellitesForWorkload(computeSatellites, selectedWorkload),
     [selectedWorkload],
   );
+  const routableComputeSatellites = useMemo(
+    () => rankedComputeSatellites.filter((item) => item.satellite.id !== farthestSaudiComputeId),
+    [farthestSaudiComputeId, rankedComputeSatellites],
+  );
   const orbitalRouteAssignment = useMemo(
     () =>
       buildOrbitalRouteAssignment({
         computePoints,
         groundStations,
-        rankedComputeSatellites,
+        rankedComputeSatellites: routableComputeSatellites,
         workload: selectedWorkload,
         constraints: schedulerSnapshot,
         stormActive,
       }),
-    [computePoints, rankedComputeSatellites, schedulerSnapshot, selectedWorkload, stormActive],
+    [computePoints, routableComputeSatellites, schedulerSnapshot, selectedWorkload, stormActive],
   );
   const routeArcs = useMemo<DownlinkArc[]>(() => {
     if (!orbitalRouteAssignment) {
@@ -725,7 +754,7 @@ export function MissionControl({ country, logoTransitioning = false, onBackToGlo
     [orbitalRouteAssignment, selectedWorkload, stormActive],
   );
   const activeCompute = missionActive || activeMode === "simulate"
-    ? computeSatellites.slice(0, selectedWorkload.id === "training" || selectedWorkload.id === "auto" ? 3 : 2)
+    ? computeSatellites.filter((satellite) => satellite.id !== farthestSaudiComputeId)
     : [];
   const spaceWeatherModeLabel = spaceWeatherScenario.mode === "live" ? "Live NASA" : "Cached NASA";
   const spaceWeatherSourceLabel = `${spaceWeatherScenario.provider} ${spaceWeatherScenario.mode === "live" ? "live feed" : "scenario"}`;
@@ -912,7 +941,7 @@ export function MissionControl({ country, logoTransitioning = false, onBackToGlo
     setLastPlannerRequest(requestBody);
     setLastSchedulerSnapshot(schedulerOverride);
     setSidebarOpen(true);
-    setSelectedSatelliteId("compute-a");
+    setSelectedSatelliteId(nearestSaudiComputeId);
     globeRef.current?.pointOfView({ lat: 24.8, lng: 50.2, altitude: 1.38 }, 1100);
 
     void (async () => {
@@ -1056,6 +1085,14 @@ export function MissionControl({ country, logoTransitioning = false, onBackToGlo
               if (stormActive && item.kind === "compute" && item.id === "compute-a") {
                 return "#34d399";
               }
+              if (item.kind === "compute" && (missionActive || activeMode === "simulate")) {
+                if (item.id === farthestSaudiComputeId) {
+                  return "#64748b";
+                }
+                if (item.id === nearestSaudiComputeId) {
+                  return "#34d399";
+                }
+              }
               if (item.kind === "compute" && activeCompute.some((satellite) => satellite.id === item.id)) {
                 return "#ffd166";
               }
@@ -1105,11 +1142,20 @@ export function MissionControl({ country, logoTransitioning = false, onBackToGlo
             objectFacesSurfaces
             objectThreeObject={(point) => {
               const item = point as OrbitPoint;
-              return createOrbitalDataCenterModel(item, stormActive, item.id === selectedSatelliteId);
+              const operationActive = missionActive || activeMode === "simulate";
+              const computeActive =
+                !operationActive ||
+                (stormActive && (item.id === "compute-a" || item.id === "compute-b")) ||
+                activeCompute.some((satellite) => satellite.id === item.id);
+              return createOrbitalDataCenterModel(item, stormActive, item.id === selectedSatelliteId, computeActive);
             }}
             objectLabel={(point) => {
               const item = point as OrbitPoint;
-              return `${item.name}<br/>Moving LEO AI data center<br/>${formatCoordinate(item.lat, "lat")} / ${formatCoordinate(item.lng, "lng")}<br/>${item.satellite?.gpuType ?? "GPU"} compute node`;
+              const operationActive = missionActive || activeMode === "simulate";
+              const switchedOff = operationActive && item.id === farthestSaudiComputeId && !stormActive;
+              const nearest = operationActive && item.id === nearestSaudiComputeId;
+              const powerState = switchedOff ? "Switched off - farthest from Saudi" : nearest ? "Active - closest to Saudi" : "Backup active";
+              return `${item.name}<br/>${powerState}<br/>${formatCoordinate(item.lat, "lat")} / ${formatCoordinate(item.lng, "lng")}<br/>${item.satellite?.gpuType ?? "GPU"} compute node`;
             }}
             onObjectClick={(point) => {
               const item = point as OrbitPoint;
