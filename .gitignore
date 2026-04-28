@@ -43,3 +43,6 @@ Thumbs.db
 
 # Testing
 coverage/
+
+#documents
+/photonix-project-doc.docx

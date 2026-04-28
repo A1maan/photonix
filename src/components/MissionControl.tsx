@@ -9,6 +9,7 @@ import {
   Clock3,
   Cpu,
   DatabaseZap,
+  Maximize2,
   Orbit,
   Pause,
   Play,
@@ -19,6 +20,7 @@ import {
   Sun,
   SlidersHorizontal,
   Waves,
+  X,
 } from "lucide-react";
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -34,6 +36,15 @@ import {
   type DownlinkArc,
   type OrbitPoint,
 } from "../lib/orbit";
+import {
+  buildFallbackPlannerResponse,
+  validatePlannerResponse,
+  type PlannerRequest,
+  type PlannerResponse,
+  type PlannerSection,
+} from "../lib/planner";
+import { createSolarStormVfx, type SolarStormVfxHandle } from "../lib/solarStormVfx";
+import { getCachedSpaceWeatherScenario, loadSpaceWeatherScenario, type SpaceWeatherScenario } from "../lib/spaceWeather";
 import type { ComputeSatellite, OrbitalWorkload } from "../types";
 
 type MissionControlProps = {
@@ -42,19 +53,9 @@ type MissionControlProps = {
   onBackToGlobe: () => void;
 };
 
-type ChatMessage = {
-  role: "operator" | "planner";
-  text: string;
-};
-
 type MissionMode = "plan" | "simulate";
 type PlanPriority = "solar" | "latency" | "cost";
 type AltitudePreset = 550 | 610 | 720;
-
-type PlannerSection = {
-  title: string;
-  body: string;
-};
 
 type PlanMetrics = {
   totalSatellites: number;
@@ -105,6 +106,35 @@ function formatCurrency(value: number) {
 
 function formatNumber(value: number) {
   return new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }).format(value);
+}
+
+function formatUtcTime(value?: string) {
+  if (!value) {
+    return "N/A";
+  }
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+
+  return `${date.toLocaleString("en-US", {
+    month: "short",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+    timeZone: "UTC",
+  })} UTC`;
+}
+
+function formatSeverity(scenario: SpaceWeatherScenario) {
+  return `${scenario.severity.toUpperCase()} / ${Math.round(scenario.intensity * 100)}%`;
+}
+
+function globeVector(globe: GlobeMethods, lat: number, lng: number, altitude: number) {
+  const coords = globe.getCoords(lat, lng, altitude);
+  return new THREE.Vector3(coords.x, coords.y, coords.z);
 }
 
 function satelliteStatus(satellite: ComputeSatellite, workload: OrbitalWorkload) {
@@ -231,42 +261,46 @@ function calculatePlanMetrics(
   };
 }
 
-function buildPlannerSections(
-  workload: OrbitalWorkload,
-  metrics: PlanMetrics,
-  altitudeKm: AltitudePreset,
-  priority: PlanPriority,
-  comparison: ReturnType<typeof compareOrbitalToTerrestrial>,
-): PlannerSection[] {
-  const priorityLabel = PRIORITIES.find((item) => item.id === priority)?.label ?? "Solar uptime";
+function priorityLabel(priority: PlanPriority | PlannerRequest["constellation"]["priority"]) {
+  return PRIORITIES.find((item) => item.id === priority)?.label ?? "Solar uptime";
+}
 
-  return [
-    {
-      title: "Recommended Orbit",
-      body: `${altitudeKm} km dawn-dusk shell tuned for ${priorityLabel.toLowerCase()}, ${metrics.totalSatellites} compute sats across the configured planes.`,
-    },
-    {
-      title: "Data Center Assignment",
-      body: `${workload.name} runs on Dawn-1 and Dawn-2 first, with Gulf Nano held as regional reserve for burst or degraded operations.`,
-    },
-    {
-      title: "Downlink Plan",
-      body: `Primary paths stay Riyadh and Dubai, with Abu Dhabi as overflow. Modeled GCC coverage score is ${metrics.coverageScore}%.`,
-    },
-    {
-      title: "Cost/Water Impact",
-      body: `${formatCurrency(metrics.launchCost)} launch envelope, ${formatCurrency(comparison.orbitalMonthlyCost)} modeled orbital monthly, and ${formatNumber(comparison.terrestrialWaterLitersDay)} L/day avoided versus ground cooling.`,
-    },
-    {
-      title: "Risk Notes",
-      body: `This is a deterministic demo model. Exact pass timing, radiation exposure, and live capacity pricing need production-grade analysis later.`,
-    },
-  ];
+function plannerSourceLabel(response: PlannerResponse | null) {
+  if (!response) {
+    return "Planner idle";
+  }
+
+  return response.source === "deepseek" ? "DeepSeek V4 Flash" : "Deterministic fallback";
+}
+
+function plannerSourceClass(response: PlannerResponse | null) {
+  if (!response) {
+    return "idle";
+  }
+
+  return response.source;
+}
+
+function sectionBadge(section: PlannerSection) {
+  if (section.title === "Cost/Water Impact") {
+    return "Modeled economics";
+  }
+  if (section.title === "Downlink Plan") {
+    return "Modeled windows";
+  }
+  if (section.title === "Risk Notes") {
+    return "Guardrail";
+  }
+  return null;
 }
 
 export function MissionControl({ country, logoTransitioning = false, onBackToGlobe }: MissionControlProps) {
   const globeRef = useRef<GlobeMethods | undefined>(undefined);
-  const answerTimerRef = useRef<number | null>(null);
+  const plannerAbortRef = useRef<AbortController | null>(null);
+  const plannerRequestIdRef = useRef(0);
+  const stormVfxRef = useRef<SolarStormVfxHandle | null>(null);
+  const stormAnimationFrameRef = useRef<number | null>(null);
+  const stormLastFrameRef = useRef<number | null>(null);
   const [clock, setClock] = useState(() => new Date());
   const [activeMode, setActiveMode] = useState<MissionMode>("plan");
   const [selectedWorkloadId, setSelectedWorkloadId] = useState<OrbitalWorkload["id"]>("llm");
@@ -280,14 +314,13 @@ export function MissionControl({ country, logoTransitioning = false, onBackToGlo
   const [missionActive, setMissionActive] = useState(false);
   const [question, setQuestion] = useState(DEFAULT_QUESTION);
   const [thinking, setThinking] = useState(false);
+  const [plannerResponse, setPlannerResponse] = useState<PlannerResponse | null>(null);
+  const [lastPlannerQuestion, setLastPlannerQuestion] = useState("");
+  const [lastPlannerRequest, setLastPlannerRequest] = useState<PlannerRequest | null>(null);
+  const [planWindowOpen, setPlanWindowOpen] = useState(false);
   const [selectedSatelliteId, setSelectedSatelliteId] = useState("compute-a");
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [messages, setMessages] = useState<ChatMessage[]>([
-    {
-      role: "planner",
-      text: "Photonix planner is standing by with cached Starlink shell data, GCC ground stations, and orbital compute presets.",
-    },
-  ]);
+  const [spaceWeatherScenario, setSpaceWeatherScenario] = useState<SpaceWeatherScenario>(() => getCachedSpaceWeatherScenario());
   const { width, height } = useWindowSize();
 
   const selectedWorkload = useMemo(
@@ -330,14 +363,73 @@ export function MissionControl({ country, logoTransitioning = false, onBackToGlo
     () => compareOrbitalToTerrestrial(computeSatellites, selectedWorkload),
     [selectedWorkload],
   );
-  const plannerSections = useMemo(
-    () => buildPlannerSections(selectedWorkload, planMetrics, altitudeKm, planPriority, comparison),
-    [altitudeKm, comparison, planMetrics, planPriority, selectedWorkload],
-  );
+  const createPlannerRequest = (plannerQuestion: string): PlannerRequest => ({
+    question: plannerQuestion,
+    country,
+    workload: {
+      id: selectedWorkload.id,
+      name: selectedWorkload.name,
+      requiredPowerKw: selectedWorkload.requiredPowerKw,
+      latencySensitive: selectedWorkload.latencySensitive,
+      description: selectedWorkload.description,
+      target: selectedWorkload.target,
+    },
+    constellation: {
+      orbitalPlanes,
+      satellitesPerPlane,
+      altitudeKm,
+      priority: planPriority,
+    },
+    metrics: planMetrics,
+    comparison,
+    computeSatellites: computeSatellites.map((satellite) => ({
+      id: satellite.id,
+      name: satellite.name,
+      orbitName: satellite.orbitName,
+      altitudeKm: satellite.altitudeKm,
+      inclinationDeg: satellite.inclinationDeg,
+      gpuType: satellite.gpuType,
+      powerKw: satellite.powerKw,
+      thermalCapacityKw: satellite.thermalCapacityKw,
+      sunlightPercent: satellite.sunlightPercent,
+      massKg: satellite.massKg,
+    })),
+    groundStations: groundStations.map((station) => ({
+      id: station.id,
+      name: station.name,
+      city: station.city,
+      lat: station.lat,
+      lng: station.lng,
+      bandwidthGbps: station.bandwidthGbps,
+    })),
+  });
+  const activePlannerRequest = lastPlannerRequest ?? createPlannerRequest(question.trim() || DEFAULT_QUESTION);
+  const activePlannerQuestion = lastPlannerQuestion || activePlannerRequest.question;
+  const planWindowAvailable = Boolean(plannerResponse);
+  const quickPlannerActions = [
+    {
+      label: "Optimize latency",
+      question: `Optimize this ${selectedWorkload.name.toLowerCase()} orbital AI data center plan for lowest practical Riyadh and Dubai latency.`,
+    },
+    {
+      label: "Compare orbits",
+      question: `Compare 550 km, 610 km, and 720 km options for ${selectedWorkload.name.toLowerCase()} using the current constellation settings.`,
+    },
+    {
+      label: "Explain risks",
+      question: `Explain the highest-risk assumptions in this ${selectedWorkload.name.toLowerCase()} mission plan for Saudi Arabia.`,
+    },
+    {
+      label: "Pitch summary",
+      question: `Write a concise investor-style mission plan summary for this ${selectedWorkload.name.toLowerCase()} Photonix scenario.`,
+    },
+  ];
   const selectedSatellite = computeSatellites.find((satellite) => satellite.id === selectedSatelliteId) ?? computeSatellites[0];
   const activeCompute = missionActive || activeMode === "simulate"
     ? computeSatellites.slice(0, selectedWorkload.id === "training" ? 3 : 2)
     : [];
+  const spaceWeatherModeLabel = spaceWeatherScenario.mode === "live" ? "Live NASA" : "Cached NASA";
+  const spaceWeatherSourceLabel = `${spaceWeatherScenario.provider} ${spaceWeatherScenario.mode === "live" ? "live feed" : "scenario"}`;
 
   const globeWidth = width;
   const globeHeight = height;
@@ -366,6 +458,20 @@ export function MissionControl({ country, logoTransitioning = false, onBackToGlo
   }, [activeMode]);
 
   useEffect(() => {
+    let active = true;
+
+    void loadSpaceWeatherScenario(import.meta.env.VITE_NASA_API_KEY).then((scenario) => {
+      if (active) {
+        setSpaceWeatherScenario(scenario);
+      }
+    });
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
     const timeout = window.setTimeout(() => {
       globeRef.current?.pointOfView(SAUDI_VIEW, 1200);
       const controls = globeRef.current?.controls();
@@ -391,28 +497,153 @@ export function MissionControl({ country, logoTransitioning = false, onBackToGlo
 
   useEffect(() => {
     return () => {
-      if (answerTimerRef.current) {
-        window.clearTimeout(answerTimerRef.current);
+      plannerAbortRef.current?.abort();
+      if (stormAnimationFrameRef.current !== null) {
+        window.cancelAnimationFrame(stormAnimationFrameRef.current);
       }
     };
   }, []);
 
+  useEffect(() => {
+    if (!planWindowOpen) {
+      return undefined;
+    }
+
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setPlanWindowOpen(false);
+      }
+    };
+
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [planWindowOpen]);
+
+  useEffect(() => {
+    if (stormAnimationFrameRef.current !== null) {
+      window.cancelAnimationFrame(stormAnimationFrameRef.current);
+      stormAnimationFrameRef.current = null;
+    }
+    stormLastFrameRef.current = null;
+
+    const existingVfx = stormVfxRef.current;
+    if (existingVfx) {
+      existingVfx.dispose();
+      stormVfxRef.current = null;
+    }
+
+    if (!stormActive || activeMode !== "simulate") {
+      return undefined;
+    }
+
+    const globe = globeRef.current;
+    const scene = globe?.scene();
+    if (!globe || !scene) {
+      return undefined;
+    }
+
+    const atRiskPoint = computePoints.find((point) => point.id === "compute-b") ?? computePoints[1] ?? computePoints[0];
+    const stormVfx = createSolarStormVfx({
+      start: globeVector(globe, 4, -48, 0.96),
+      end: globeVector(globe, 28, 82, 0.5),
+      impact: globeVector(globe, atRiskPoint.lat, atRiskPoint.lng, atRiskPoint.altitude + 0.2),
+      intensity: spaceWeatherScenario.intensity,
+    });
+
+    scene.add(stormVfx.group);
+    stormVfxRef.current = stormVfx;
+
+    const animateStorm = (frameTime: number) => {
+      const lastFrame = stormLastFrameRef.current ?? frameTime;
+      stormLastFrameRef.current = frameTime;
+      stormVfx.update(Math.min(0.05, (frameTime - lastFrame) / 1000));
+      stormAnimationFrameRef.current = window.requestAnimationFrame(animateStorm);
+    };
+
+    stormAnimationFrameRef.current = window.requestAnimationFrame(animateStorm);
+
+    return () => {
+      if (stormAnimationFrameRef.current !== null) {
+        window.cancelAnimationFrame(stormAnimationFrameRef.current);
+        stormAnimationFrameRef.current = null;
+      }
+      stormLastFrameRef.current = null;
+      if (stormVfxRef.current === stormVfx) {
+        stormVfxRef.current = null;
+      }
+      stormVfx.dispose();
+    };
+  }, [activeMode, stormActive, spaceWeatherScenario.intensity]);
+
+  useEffect(() => {
+    const globe = globeRef.current;
+    const stormVfx = stormVfxRef.current;
+    if (!stormActive || !globe || !stormVfx) {
+      return;
+    }
+
+    const atRiskPoint = computePoints.find((point) => point.id === "compute-b") ?? computePoints[1] ?? computePoints[0];
+    stormVfx.setImpactPosition(globeVector(globe, atRiskPoint.lat, atRiskPoint.lng, atRiskPoint.altitude + 0.2));
+  }, [computePoints, stormActive]);
+
   const runPlanner = (overrideQuestion?: string) => {
     const trimmedQuestion = overrideQuestion?.trim() || question.trim() || DEFAULT_QUESTION;
-    if (answerTimerRef.current) {
-      window.clearTimeout(answerTimerRef.current);
-    }
+    const requestBody = createPlannerRequest(trimmedQuestion);
+    const requestId = plannerRequestIdRef.current + 1;
+    const controller = new AbortController();
+
+    plannerRequestIdRef.current = requestId;
+    plannerAbortRef.current?.abort();
+    plannerAbortRef.current = controller;
 
     setMissionActive(true);
     setThinking(true);
+    setPlannerResponse(null);
+    setPlanWindowOpen(false);
+    setLastPlannerQuestion(trimmedQuestion);
+    setLastPlannerRequest(requestBody);
     setSidebarOpen(true);
     setSelectedSatelliteId("compute-a");
-    setMessages([{ role: "operator", text: trimmedQuestion }]);
     globeRef.current?.pointOfView({ lat: 24.8, lng: 50.2, altitude: 1.38 }, 1100);
 
-    answerTimerRef.current = window.setTimeout(() => {
-      setThinking(false);
-    }, 850);
+    void (async () => {
+      try {
+        const response = await fetch("/api/planner", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(requestBody),
+          signal: controller.signal,
+        });
+
+        if (!response.ok) {
+          throw new Error(`Planner endpoint returned ${response.status}.`);
+        }
+
+        const validation = validatePlannerResponse(await response.json());
+        if (!validation.ok) {
+          throw new Error(validation.error);
+        }
+
+        if (plannerRequestIdRef.current === requestId) {
+          setPlannerResponse(validation.value);
+          setPlanWindowOpen(true);
+        }
+      } catch (error) {
+        if (plannerRequestIdRef.current === requestId && !controller.signal.aborted) {
+          const reason = error instanceof Error ? error.message : "Unknown planner error.";
+          setPlannerResponse(
+            buildFallbackPlannerResponse(requestBody, [
+              `DeepSeek planner unavailable or invalid; deterministic fallback shown. ${reason}`,
+            ]),
+          );
+          setPlanWindowOpen(true);
+        }
+      } finally {
+        if (plannerRequestIdRef.current === requestId) {
+          setThinking(false);
+        }
+      }
+    })();
   };
 
   const runGccLlmScenario = () => {
@@ -439,7 +670,9 @@ export function MissionControl({ country, logoTransitioning = false, onBackToGlo
 
   return (
     <main
-      className={`mission-control min-h-screen bg-[#02060b] text-white ${sidebarOpen ? "is-drawer-open" : ""} ${
+      className={`mission-control min-h-screen bg-[#02060b] text-white ${activeMode === "plan" ? "is-plan-mode" : "is-sim-mode"} ${
+        sidebarOpen ? "is-drawer-open" : ""
+      } ${
         logoTransitioning ? "is-logo-transitioning" : ""
       } ${activeMode === "simulate" ? "is-simulating" : ""} ${simulationPlaying ? "is-simulation-running" : ""} ${
         stormActive ? "is-storm-active" : ""
@@ -473,7 +706,13 @@ export function MissionControl({ country, logoTransitioning = false, onBackToGlo
             ref={globeRef}
             width={globeWidth}
             height={globeHeight}
-            globeOffset={width >= 1120 ? (sidebarOpen ? [-260, 0] : [230, 0]) : [0, 0]}
+            globeOffset={
+              width >= 1120
+                ? sidebarOpen
+                  ? [-260, 0]
+                  : [230, 0]
+                : [0, 0]
+            }
             globeImageUrl={GLOBE_IMAGE_URL}
             backgroundImageUrl={BACKGROUND_IMAGE_URL}
             backgroundColor="#02060b"
@@ -559,11 +798,8 @@ export function MissionControl({ country, logoTransitioning = false, onBackToGlo
                 </div>
               )}
               {stormActive && (
-                <div className="storm-front">
-                  <span>Solar storm front</span>
-                  <i />
-                  <i />
-                  <i />
+                <div className="storm-event-label">
+                  <span>{spaceWeatherScenario.mode === "live" ? "Live DONKI CME event" : "Cached DONKI CME event"}</span>
                 </div>
               )}
             </div>
@@ -576,6 +812,23 @@ export function MissionControl({ country, logoTransitioning = false, onBackToGlo
             <Sparkles size={15} />
             Run GCC LLM scenario
           </button>
+          {(thinking || planWindowAvailable) && (
+            <button
+              type="button"
+              className={`plan-float-button absolute z-20 ${planWindowAvailable ? "is-ready" : "is-loading"}`}
+              onClick={() => {
+                if (plannerResponse) {
+                  setPlanWindowOpen(true);
+                }
+              }}
+              disabled={!plannerResponse}
+              aria-label={plannerResponse ? "Open generated mission plan" : "Mission plan is generating"}
+            >
+              {plannerResponse ? <Maximize2 size={16} /> : <span aria-hidden="true" />}
+              <strong>{plannerResponse ? "View plan" : "Generating plan"}</strong>
+              {plannerResponse && <small>{plannerResponse.confidence} confidence</small>}
+            </button>
+          )}
           <div className="mission-telemetry absolute bottom-5 left-5 right-5 z-20 grid gap-3 sm:grid-cols-3">
             <Telemetry
               icon={<Satellite size={16} />}
@@ -585,7 +838,7 @@ export function MissionControl({ country, logoTransitioning = false, onBackToGlo
             <Telemetry
               icon={<RadioTower size={16} />}
               label={activeMode === "simulate" ? "Ops state" : "Launch manifest"}
-              value={activeMode === "simulate" ? (stormActive ? "Storm active" : "Nominal") : `${planMetrics.launches} launches`}
+              value={activeMode === "simulate" ? (stormActive ? "CME event" : "Nominal") : `${planMetrics.launches} launches`}
             />
             <Telemetry
               icon={<Sun size={16} />}
@@ -605,7 +858,7 @@ export function MissionControl({ country, logoTransitioning = false, onBackToGlo
           <span>{sidebarOpen ? "Hide" : activeMode === "simulate" ? "Sim" : "Plan"}</span>
         </button>
 
-        <aside className={`mission-panel ${sidebarOpen ? "is-open" : ""}`}>
+        <aside className={`mission-panel ${activeMode === "plan" ? "is-plan-drawer" : "is-sim-drawer"} ${sidebarOpen ? "is-open" : ""}`}>
           <div className="mission-panel-header">
             <span>Mission controls</span>
             <button
@@ -732,31 +985,16 @@ export function MissionControl({ country, logoTransitioning = false, onBackToGlo
                 </div>
               </section>
 
-              <section className="mission-card chat-card">
-                <div className="mission-card-title">
+              <section className="mission-card mission-plan-card">
+                <div className="mission-card-title planner-title-row">
                   <Bot size={17} />
                   AI Mission Planner
-                </div>
-                <div className="chat-log">
-                  {messages.slice(-2).map((message, index) => (
-                    <div key={`${message.role}-${index}-${message.text.slice(0, 12)}`} className={`chat-message ${message.role}`}>
-                      {message.text}
-                    </div>
-                  ))}
-                  {thinking && <div className="chat-message planner is-thinking">Analyzing orbit slots, sunlight and GCC downlinks...</div>}
-                  {missionActive && !thinking && (
-                    <div className="planner-result-grid">
-                      {plannerSections.map((section) => (
-                        <div key={section.title} className="planner-result-card">
-                          <span>{section.title}</span>
-                          <p>{section.body}</p>
-                        </div>
-                      ))}
-                    </div>
-                  )}
+                  <span className={`planner-source-badge is-${plannerSourceClass(plannerResponse)}`}>
+                    {plannerSourceLabel(plannerResponse)}
+                  </span>
                 </div>
                 <form
-                  className="chat-form"
+                  className="planner-command-form"
                   onSubmit={(event) => {
                     event.preventDefault();
                     runPlanner();
@@ -769,11 +1007,67 @@ export function MissionControl({ country, logoTransitioning = false, onBackToGlo
                     className="mission-input"
                     aria-label="Mission planner question"
                   />
+                  <div className="planner-quick-actions" aria-label="Planner quick actions">
+                    {quickPlannerActions.map((action) => (
+                      <button
+                        key={action.label}
+                        type="button"
+                        onClick={() => {
+                          setQuestion(action.question);
+                          runPlanner(action.question);
+                        }}
+                      >
+                        {action.label}
+                      </button>
+                    ))}
+                  </div>
                   <button type="submit" className="mission-send" aria-label="Ask mission planner">
                     <Send size={16} />
-                    Run demo query
+                    Generate Mission Plan
                   </button>
                 </form>
+
+                <div className="planner-config-strip" aria-label="Planner config snapshot">
+                  <PlannerChip label="Workload" value={activePlannerRequest.workload.name} />
+                  <PlannerChip
+                    label="Constellation"
+                    value={`${activePlannerRequest.constellation.orbitalPlanes} x ${activePlannerRequest.constellation.satellitesPerPlane} sats`}
+                  />
+                  <PlannerChip label="Orbit" value={`${activePlannerRequest.constellation.altitudeKm} km`} />
+                  <PlannerChip label="Priority" value={priorityLabel(activePlannerRequest.constellation.priority)} />
+                  <PlannerChip label="Solar" value={`${activePlannerRequest.metrics.solarUptime}%`} />
+                  <PlannerChip label="Coverage" value={`${activePlannerRequest.metrics.coverageScore}%`} />
+                </div>
+
+                {thinking && (
+                  <div className="planner-processing" aria-live="polite">
+                    <span />
+                    Generating mission plan...
+                  </div>
+                )}
+
+                {!thinking && plannerResponse && (
+                  <div className="mission-plan-output is-compact">
+                    <div className="mission-plan-summary">
+                      <div>
+                        <span>Plan generated</span>
+                        <strong>{plannerResponse.summary}</strong>
+                      </div>
+                      <em>{plannerResponse.confidence} confidence</em>
+                    </div>
+                    <button type="button" className="planner-open-button" onClick={() => setPlanWindowOpen(true)}>
+                      <Maximize2 size={16} />
+                      View Full Plan
+                    </button>
+                  </div>
+                )}
+
+                {!thinking && !plannerResponse && (
+                  <div className="planner-empty-state">
+                    <strong>Planner ready</strong>
+                    <p>Generate a mission plan from the selected workload, orbit, constellation, and priority.</p>
+                  </div>
+                )}
               </section>
 
               <section className="mission-card">
@@ -909,8 +1203,46 @@ export function MissionControl({ country, logoTransitioning = false, onBackToGlo
                   }}
                 >
                   <AlertTriangle size={16} />
-                  {stormActive ? "Reset Storm" : "Trigger Solar Storm"}
+                  {stormActive ? "Reset Event" : "Trigger CME Event"}
                 </button>
+              </section>
+
+              <section className="mission-card compact">
+                <div className="mission-card-title mission-card-title-with-badge">
+                  <Sun size={17} />
+                  Space Weather Event
+                  <span className={`space-weather-badge is-${spaceWeatherScenario.mode}`}>{spaceWeatherModeLabel}</span>
+                </div>
+                <div className="space-weather-summary">
+                  <strong>{spaceWeatherScenario.title}</strong>
+                  <span>{spaceWeatherSourceLabel} / {formatSeverity(spaceWeatherScenario)}</span>
+                </div>
+                <div className="spec-grid space-weather-grid">
+                  <Spec label="Flare" value={spaceWeatherScenario.flare?.classType ?? "N/A"} />
+                  <Spec label="Peak" value={formatUtcTime(spaceWeatherScenario.flare?.peakTime)} />
+                  <Spec
+                    label="Source"
+                    value={
+                      spaceWeatherScenario.flare?.sourceLocation
+                        ? `${spaceWeatherScenario.flare.sourceLocation}${spaceWeatherScenario.flare.activeRegionNum ? ` / AR ${spaceWeatherScenario.flare.activeRegionNum}` : ""}`
+                        : "N/A"
+                    }
+                  />
+                  <Spec
+                    label="CME speed"
+                    value={spaceWeatherScenario.cme?.speedKms ? `${Math.round(spaceWeatherScenario.cme.speedKms)} km/s` : "N/A"}
+                  />
+                </div>
+                <div className="space-weather-notes">
+                  {spaceWeatherScenario.riskNotes.slice(0, 2).map((note) => (
+                    <span key={note}>{note}</span>
+                  ))}
+                </div>
+                {spaceWeatherScenario.sourceUrl && (
+                  <a href={spaceWeatherScenario.sourceUrl} target="_blank" rel="noreferrer" className="space-weather-link">
+                    Open DONKI source
+                  </a>
+                )}
               </section>
 
               <section className="mission-card">
@@ -946,7 +1278,7 @@ export function MissionControl({ country, logoTransitioning = false, onBackToGlo
                 <div className="timeline-list">
                   <OperationEvent time="T+00" label="Nominal operations" active />
                   <OperationEvent time="T+06" label="Eclipse margin check" active={simulationOffsetHours >= 6} />
-                  <OperationEvent time="T+12" label="Solar storm detected" active={stormActive} warning={stormActive} />
+                  <OperationEvent time="T+12" label="CME/SEP risk detected" active={stormActive} warning={stormActive} />
                   <OperationEvent time="T+12:04" label="Workload migrated" active={stormActive} />
                   <OperationEvent time="T+12:15" label="Service stabilized" active={stormActive} />
                 </div>
@@ -984,13 +1316,117 @@ export function MissionControl({ country, logoTransitioning = false, onBackToGlo
             </div>
             <div className="assumption-list">
               <span>Cached CelesTrak Starlink TLE snapshot, 168 satellites</span>
-              <span>Scripted planner and deterministic storm model, no live Claude claim</span>
+              <span>DeepSeek V4 Flash planner with deterministic fallback; orbital metrics remain modeled</span>
+              <span>NASA DONKI space-weather scenario cached by default; live fetch requires VITE_NASA_API_KEY</span>
               <span>Modeled GCC downlink windows for presentation</span>
             </div>
           </section>
         </aside>
       </section>
+
+      {plannerResponse && planWindowOpen && (
+        <div className="plan-window-backdrop" role="presentation" onMouseDown={() => setPlanWindowOpen(false)}>
+          <section
+            className="plan-window"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="mission-plan-window-title"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <header className="plan-window-header">
+              <div>
+                <span>Generated mission plan</span>
+                <h2 id="mission-plan-window-title">AI Mission Planner</h2>
+              </div>
+              <div className="plan-window-actions">
+                <span className={`planner-source-badge is-${plannerSourceClass(plannerResponse)}`}>
+                  {plannerSourceLabel(plannerResponse)}
+                </span>
+                <button type="button" onClick={() => setPlanWindowOpen(false)} aria-label="Close mission plan">
+                  <X size={18} />
+                </button>
+              </div>
+            </header>
+
+            <div className="plan-window-body">
+              <div className="plan-window-summary">
+                <div>
+                  <span>Summary</span>
+                  <strong>{plannerResponse.summary}</strong>
+                </div>
+                <em>{plannerResponse.confidence} confidence</em>
+              </div>
+
+              <div className="planner-query-line">
+                <span>Query</span>
+                <p>{activePlannerQuestion}</p>
+              </div>
+
+              <div className="planner-config-strip plan-window-config" aria-label="Planner config used for generated plan">
+                <PlannerChip label="Workload" value={activePlannerRequest.workload.name} />
+                <PlannerChip
+                  label="Constellation"
+                  value={`${activePlannerRequest.constellation.orbitalPlanes} x ${activePlannerRequest.constellation.satellitesPerPlane} sats`}
+                />
+                <PlannerChip label="Orbit" value={`${activePlannerRequest.constellation.altitudeKm} km`} />
+                <PlannerChip label="Priority" value={priorityLabel(activePlannerRequest.constellation.priority)} />
+                <PlannerChip label="Solar" value={`${activePlannerRequest.metrics.solarUptime}%`} />
+                <PlannerChip label="Coverage" value={`${activePlannerRequest.metrics.coverageScore}%`} />
+              </div>
+
+              <div className="plan-guardrail-strip">
+                Model response uses Photonix deterministic mission inputs. Cost, water, latency, pass windows, and regulatory statements remain modeled demo assumptions.
+              </div>
+
+              <div className="mission-plan-sections plan-window-sections">
+                {plannerResponse.sections.map((section) => {
+                  const badge = sectionBadge(section);
+                  return (
+                    <article key={section.title} className="mission-plan-section">
+                      <header>
+                        <span>{section.title}</span>
+                        {badge && <em>{badge}</em>}
+                      </header>
+                      <p>{section.body}</p>
+                    </article>
+                  );
+                })}
+              </div>
+
+              {(plannerResponse.assumptions.length > 0 || plannerResponse.warnings.length > 0) && (
+                <div className="planner-notes-grid plan-window-notes">
+                  {plannerResponse.assumptions.length > 0 && (
+                    <div>
+                      <span>Assumptions</span>
+                      {plannerResponse.assumptions.map((item) => (
+                        <p key={item}>{item}</p>
+                      ))}
+                    </div>
+                  )}
+                  {plannerResponse.warnings.length > 0 && (
+                    <div>
+                      <span>Warnings</span>
+                      {plannerResponse.warnings.map((item) => (
+                        <p key={item}>{item}</p>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </section>
+        </div>
+      )}
     </main>
+  );
+}
+
+function PlannerChip({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="planner-chip">
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
   );
 }
 
