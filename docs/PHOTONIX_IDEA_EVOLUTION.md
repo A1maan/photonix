@@ -14,6 +14,17 @@ The original project framing emphasized one LLM inference mission for GCC users.
 
 This makes the product an orbital workload router and mission operations copilot, not primarily a tool for designing and launching a constellation from scratch.
 
+Photonix is the workload broker. Customers do not send jobs directly to satellites; they submit jobs to Photonix, and Photonix decides how to queue, split, route, and return the work.
+
+```text
+Customer systems
+  -> Photonix API / Mission Operations Center
+  -> terrestrial job queue
+  -> selected ground gateway
+  -> LEO network
+  -> LEO AI data center
+```
+
 ## Main Thesis
 
 AI infrastructure is becoming constrained by power, cooling, land, water, permitting, and grid availability. Space-based data centers are being explored because orbit may offer:
@@ -76,6 +87,16 @@ Good examples for Photonix:
 - Smart city and infrastructure monitoring.
 - Remote sensing for energy, logistics, agriculture, and climate.
 
+Likely job submitters:
+
+- Civil defense.
+- Energy companies.
+- Ports and maritime operators.
+- Logistics companies.
+- Smart city operators.
+- Remote sensing providers.
+- Government agencies.
+
 ### Strategic Long-Term Use Case
 
 Large-scale orbital AI compute using better solar availability and reduced terrestrial water/cooling constraints.
@@ -103,12 +124,26 @@ That creates avoidable technical problems and conflicts with the public directio
 Use this architecture instead:
 
 ```text
-Ground station
-  -> LEO access or relay satellite
+Customer systems
+  -> Photonix API / Mission Operations Center
+  -> selected ground gateway
+  -> LEO access or transport node
   -> optical inter-satellite links through LEO mesh
   -> LEO orbital AI data center cluster
   -> best available ground station for result downlink
 ```
+
+Ground gateways are the first communication layer. They are professional Earth stations with high-quality RF or optical terminals, tracking, fiber backhaul, power backup, and weather-aware routing. They should not be confused with ordinary customer sites.
+
+Optional future layer:
+
+```text
+Ground gateway / optional HAPS
+  -> LEO transport mesh
+  -> LEO AI compute node
+```
+
+HAPS means a high-altitude platform system. It is not a satellite; it is a stratospheric platform that could act as a regional communications bridge in a future version. It is not required for the core demo.
 
 Operationally, the planner should see this as a changing network of available compute options:
 
@@ -126,6 +161,7 @@ Key correction:
 - A LEO satellite is not stationary over one region.
 - LEO satellites move quickly and have limited ground visibility windows.
 - Geostationary satellites appear fixed from Earth, but they are much higher and should not be the default compute architecture for Photonix.
+- There is no stationary LEO layer. If something appears stationary from Earth, it is geostationary, ground-based, or potentially a non-satellite platform such as HAPS.
 
 ## Communication Model
 
@@ -198,6 +234,16 @@ It should consider:
 - Ground-station visibility.
 - Link quality and bandwidth.
 - Whether each task is urgent, delay-tolerant, splittable, or compressible.
+
+It should also decide:
+
+- Which jobs to prioritize.
+- Whether to split, compress, buffer, or delay.
+- Which ground gateway to use.
+- Which satellite or satellite group to assign.
+- When to wait for a better pass.
+- When to fail over.
+- How to return results to the customer.
 
 Example:
 
@@ -302,7 +348,7 @@ After a plan is generated, the AI should output a concise brief:
 
 Short version:
 
-> Photonix is mission-control software for routing many AI jobs across LEO orbital data centers. It assumes the orbital compute network already exists, then decides how to split and assign each job based on hardware requirements, deadlines, power, temperature, compute capacity, link quality, space-weather risk, and ground-station access.
+> Photonix is a mission operations platform for routing many AI jobs across LEO orbital data centers. Customers submit jobs to Photonix; Photonix prioritizes and splits them, selects a ground gateway, routes them through the LEO network, and assigns them to the healthiest available orbital AI compute node.
 
 Longer version:
 
